@@ -207,12 +207,43 @@ curl -fsSL "$SERVER_URL/download/anyssh-client/$ACTUAL_ARCH" -o "$TMP_FILE"
 echo "$EXPECTED_SHA256  $TMP_FILE" | sha256sum -c - >/dev/null
 chmod 0755 "$TMP_FILE"
 
+stop_pid_file() {
+  local pid_file="$1" expected_exe="$2" pid current_exe
+  [[ -f "$pid_file" ]] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file"
+    return 0
+  fi
+  if [[ -e "/proc/$pid/exe" ]] && command -v readlink >/dev/null 2>&1; then
+    current_exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    if [[ "$current_exe" != "$expected_exe" && "$current_exe" != "$expected_exe (deleted)" ]]; then
+      echo "Skipping stale PID file $pid_file (PID $pid belongs to $current_exe)" >&2
+      rm -f "$pid_file"
+      return 0
+    fi
+  fi
+  kill "$pid" 2>/dev/null || true
+  for _ in {1..50}; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+}
+
 if [[ "$(id -u)" -eq 0 ]]; then
   TARGET_USER="${SUDO_USER:-root}"
   TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
   [[ -n "$TARGET_HOME" ]] || fail "cannot determine home directory for $TARGET_USER"
-  install -m 0755 "$TMP_FILE" /usr/local/bin/anyssh-client
+  USE_SYSTEMD=false
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    USE_SYSTEMD=true
+    systemctl stop anyssh-client.service 2>/dev/null || true
+  fi
+  stop_pid_file /run/anyssh-client.pid /usr/local/bin/anyssh-client
+  install -m 0755 "$TMP_FILE" /usr/local/bin/anyssh-client
+  if [[ "$USE_SYSTEMD" == true ]]; then
     cat > /etc/systemd/system/anyssh-client.service <<UNIT
 [Unit]
 Description=AnySSH reverse web terminal client
@@ -232,27 +263,22 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload
-    systemctl enable --now anyssh-client.service
-    echo "AnySSH client installed and started with systemd."
+    systemctl enable anyssh-client.service
+    systemctl restart anyssh-client.service
+    echo "AnySSH client installed or updated and restarted with systemd."
   else
-    if [[ -f /run/anyssh-client.pid ]]; then
-      kill "$(cat /run/anyssh-client.pid)" 2>/dev/null || true
-    fi
     nohup /usr/local/bin/anyssh-client >> /var/log/anyssh-client.log 2>&1 < /dev/null &
     echo $! > /run/anyssh-client.pid
-    echo "AnySSH client installed and started in the background (PID $!)."
+    echo "AnySSH client installed or updated and restarted in the background (PID $!)."
   fi
 else
   INSTALL_DIR="$HOME/.local/share/anyssh"
   install -d -m 0700 "$INSTALL_DIR"
+  stop_pid_file "$INSTALL_DIR/client.pid" "$INSTALL_DIR/anyssh-client"
   install -m 0755 "$TMP_FILE" "$INSTALL_DIR/anyssh-client"
-  if [[ -f "$INSTALL_DIR/client.pid" ]]; then
-    OLD_PID="$(cat "$INSTALL_DIR/client.pid")"
-    kill "$OLD_PID" 2>/dev/null || true
-  fi
   nohup "$INSTALL_DIR/anyssh-client" >> "$INSTALL_DIR/client.log" 2>&1 < /dev/null &
   echo $! > "$INSTALL_DIR/client.pid"
-  echo "AnySSH client installed and started in the background (PID $!)."
+  echo "AnySSH client installed or updated and restarted in the background (PID $!)."
 fi
 `, shellQuote(serverURL), checksumCases.String())
 }

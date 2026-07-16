@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"anyssh/internal/protocol"
@@ -38,11 +39,12 @@ type Client struct {
 	serverURL *url.URL
 	publicURL *url.URL
 	logger    *slog.Logger
+	rotation  atomic.Int64
 }
 
 func New(cfg Config) (*Client, error) {
-	if cfg.RotateEvery <= 0 {
-		return nil, errors.New("rotate interval must be greater than zero")
+	if cfg.RotateEvery < 0 {
+		return nil, errors.New("rotate interval cannot be negative")
 	}
 	serverURL, err := parseBaseURL(cfg.ServerURL)
 	if err != nil {
@@ -62,13 +64,15 @@ func New(cfg Config) (*Client, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Client{
+	c := &Client{
 		cfg:       cfg,
 		device:    detectDeviceInfo(),
 		serverURL: serverURL,
 		publicURL: publicURL,
 		logger:    logger,
-	}, nil
+	}
+	c.rotation.Store(int64(cfg.RotateEvery))
+	return c, nil
 }
 
 func defaultShell() string {
@@ -95,9 +99,11 @@ func (c *Client) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		cycleCtx, cancel := context.WithTimeout(ctx, c.cfg.RotateEvery)
+		cycleCtx, cancel := context.WithCancel(ctx)
+		go c.watchRotation(cycleCtx, cancel)
+		rotation := time.Duration(c.rotation.Load())
 		link := strings.TrimRight(c.publicURL.String(), "/") + "/s/" + token + "/"
-		c.logger.Info("new access link", "url", link, "device", c.device.ID, "valid_for", c.cfg.RotateEvery)
+		c.logger.Info("new access link", "url", link, "device", c.device.ID, "valid_for", rotation)
 		if c.keepRegistered(cycleCtx, token) {
 			cancel()
 			continue
@@ -105,6 +111,29 @@ func (c *Client) Run(ctx context.Context) error {
 		cancel()
 	}
 	return ctx.Err()
+}
+
+func (c *Client) watchRotation(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	last := time.Duration(c.rotation.Load())
+	changedAt := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			current := time.Duration(c.rotation.Load())
+			if current != last {
+				last = current
+				changedAt = now
+			}
+			if current > 0 && now.Sub(changedAt) >= current {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 var errRotate = errors.New("rotate requested")
@@ -156,6 +185,9 @@ func (c *Client) serveControl(ctx context.Context, ws *websocket.Conn) error {
 			} else if msg.Type == "rotate" {
 				done <- errRotate
 				return
+			} else if msg.Type == "set_rotate" && msg.RotateSeconds >= 0 {
+				c.rotation.Store(msg.RotateSeconds * int64(time.Second))
+				c.logger.Info("link rotation updated", "interval", time.Duration(c.rotation.Load()))
 			}
 		}
 	}()

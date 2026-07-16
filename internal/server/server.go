@@ -79,7 +79,7 @@ func New(cfg Config) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if cfg.ClientRotate <= 0 {
+	if cfg.ClientRotate < 0 {
 		cfg.ClientRotate = time.Hour
 	}
 	assets, err := fs.Sub(webFiles, "web")
@@ -139,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/", s.handleAdminPage)
 	mux.HandleFunc("/api/admin/clients", s.handleAdminClients)
 	mux.HandleFunc("/api/admin/clients/", s.handleAdminClientAction)
+	mux.HandleFunc("/api/admin/settings", s.handleAdminSettings)
 	mux.HandleFunc("/s/", s.handlePublic)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -183,6 +184,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		old.close()
 	}
 	s.logger.Info("client registered", "token_prefix", token[:8])
+	s.mu.Lock()
+	rotateSeconds := int64(s.clientRotate / time.Second)
+	s.mu.Unlock()
+	_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: rotateSeconds})
 	go s.notifyClientLink(c)
 
 	ws.SetReadLimit(4096)

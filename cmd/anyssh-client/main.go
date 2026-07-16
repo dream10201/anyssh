@@ -41,7 +41,7 @@ func embeddedClientConfig() (appclient.Config, error) {
 		return appclient.Config{}, errors.New("this base client has no server parameters; install it from the server /install endpoint")
 	}
 	rotate, err := time.ParseDuration(embedded.Rotate)
-	if err != nil || rotate <= 0 {
+	if err != nil || rotate < 0 {
 		return appclient.Config{}, errors.New("invalid embedded rotation interval")
 	}
 	if embedded.ServerURL == "" {

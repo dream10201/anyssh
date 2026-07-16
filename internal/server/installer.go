@@ -68,10 +68,13 @@ func (s *Server) configuredClient(r *http.Request, arch string) ([]byte, error) 
 	if err != nil || len(binary) == 0 {
 		return nil, fmt.Errorf("read embedded client: %w", err)
 	}
+	s.mu.Lock()
+	rotation := s.clientRotate
+	s.mu.Unlock()
 	return bootstrap.Append(binary, bootstrap.Config{
 		ServerURL: s.installServerURL(r),
 		Secret:    s.secret,
-		Rotate:    s.clientRotate.String(),
+		Rotate:    rotation.String(),
 	})
 }
 

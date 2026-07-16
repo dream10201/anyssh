@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type savedSettings struct {
-	Secret string `json:"client_secret"`
+	Secret        string `json:"client_secret"`
+	RotateSeconds *int64 `json:"rotate_seconds,omitempty"`
 }
 
 func (s *Server) loadSettings() error {
@@ -30,6 +32,9 @@ func (s *Server) loadSettings() error {
 	if s.secret == "" {
 		s.secret = settings.Secret
 	}
+	if settings.RotateSeconds != nil && *settings.RotateSeconds >= 0 {
+		s.clientRotate = time.Duration(*settings.RotateSeconds) * time.Second
+	}
 	return nil
 }
 
@@ -38,7 +43,8 @@ func (s *Server) saveSettings() error {
 		return nil
 	}
 	s.mu.Lock()
-	settings := savedSettings{Secret: s.secret}
+	seconds := int64(s.clientRotate / time.Second)
+	settings := savedSettings{Secret: s.secret, RotateSeconds: &seconds}
 	s.mu.Unlock()
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

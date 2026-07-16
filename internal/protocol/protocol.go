@@ -6,9 +6,10 @@ const (
 )
 
 type ControlMessage struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id,omitempty"`
-	Key       string `json:"key,omitempty"`
+	Type          string `json:"type"`
+	SessionID     string `json:"session_id,omitempty"`
+	Key           string `json:"key,omitempty"`
+	RotateSeconds int64  `json:"rotate_seconds,omitempty"`
 }
 
 type Resize struct {

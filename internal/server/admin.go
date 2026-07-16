@@ -83,6 +83,41 @@ func (s *Server) handleAdminClients(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.Lock()
+		seconds := int64(s.clientRotate / time.Second)
+		s.mu.Unlock()
+		writeJSON(w, map[string]int64{"rotate_seconds": seconds})
+	case http.MethodPut:
+		var body struct {
+			RotateSeconds int64 `json:"rotate_seconds"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.RotateSeconds < 0 {
+			http.Error(w, "invalid rotation interval", 400)
+			return
+		}
+		s.mu.Lock()
+		s.clientRotate = time.Duration(body.RotateSeconds) * time.Second
+		clients := make([]*clientConn, 0, len(s.clients))
+		for _, c := range s.clients {
+			clients = append(clients, c)
+		}
+		s.mu.Unlock()
+		if err := s.saveSettings(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		for _, c := range clients {
+			_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds})
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
 func (s *Server) handleAdminClientAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)

@@ -15,6 +15,17 @@ func TestRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestPermanentRotationIsAccepted(t *testing.T) {
+	t.Parallel()
+	c, err := New(Config{ServerURL: "http://127.0.0.1:8080", RotateEvery: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.rotation.Load() != 0 {
+		t.Fatalf("rotation=%d, want permanent", c.rotation.Load())
+	}
+}
+
 func TestDeviceInfo(t *testing.T) {
 	t.Parallel()
 	first := makeDeviceInfo("host name\n", "deploy user", "linux", "arm64", []byte("machine-id"))

@@ -37,6 +37,10 @@ func TestRegistrationPageAndSessionProxy(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	defer control.Close()
+	var initial protocol.ControlMessage
+	if control.ReadJSON(&initial) != nil || initial.Type != "set_rotate" {
+		t.Fatalf("initial rotation message: %+v", initial)
+	}
 
 	pageResp, err := http.Get(httpServer.URL + "/s/" + token + "/")
 	if err != nil {
@@ -354,6 +358,15 @@ func TestAdminClientControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
+	var initial protocol.ControlMessage
+	if control.ReadJSON(&initial) != nil || initial.Type != "set_rotate" {
+		t.Fatalf("initial rotation message: %+v", initial)
+	}
+	putJSON(t, httpServer.URL+"/api/admin/settings", `{"rotate_seconds":120}`)
+	var update protocol.ControlMessage
+	if control.ReadJSON(&update) != nil || update.Type != "set_rotate" || update.RotateSeconds != 120 {
+		t.Fatalf("rotation update: %+v", update)
+	}
 	resp, err := http.Get(httpServer.URL + "/api/admin/clients")
 	if err != nil {
 		t.Fatal(err)
@@ -423,6 +436,9 @@ func TestSettingsPersistence(t *testing.T) {
 	if reloaded.secret != srv.secret || reloaded.secret == "" {
 		t.Fatalf("generated client secret was not persisted")
 	}
+	if reloaded.clientRotate != 0 {
+		t.Fatalf("permanent rotation was not persisted: %s", reloaded.clientRotate)
+	}
 }
 
 func TestExplicitSecretOverridesPersistedSecret(t *testing.T) {
@@ -460,5 +476,23 @@ func postJSON(t *testing.T, url, body string) {
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST %s: %d %s", url, resp.StatusCode, data)
+	}
+}
+
+func putJSON(t *testing.T, url, body string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PUT %s: %d %s", url, resp.StatusCode, data)
 	}
 }

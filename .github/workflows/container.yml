@@ -12,6 +12,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: anyssh-container-build
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest

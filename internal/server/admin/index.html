@@ -1,1 +1,41 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AnySSH 管理</title><link rel="stylesheet" href="app.css"></head><body><header><strong>AnySSH</strong><span>客户端管理</span></header><main><section><h1>已连接客户端</h1><div class="table-wrap"><table><thead><tr><th>设备</th><th>系统</th><th>状态</th><th>过期时间</th><th>操作</th></tr></thead><tbody id="clients"></tbody></table></div><p id="message"></p></section></main><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AnySSH 管理</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header><strong>AnySSH</strong><span>客户端管理</span></header>
+    <main>
+      <section>
+        <h1>链接设置</h1>
+        <div class="settings">
+          <input id="rotation" type="number" min="0" step="1" /><span
+            >分钟（0 表示永久）</span
+          ><button id="saveRotation">保存</button>
+        </div>
+        <p id="message"></p>
+      </section>
+      <section>
+        <h2>已连接客户端</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>设备</th>
+                <th>系统</th>
+                <th>状态</th>
+                <th>过期时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="clients"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

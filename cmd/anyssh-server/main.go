@@ -22,16 +22,14 @@ func main() {
 	secret := flag.String("secret", envOr("ANYSSH_SECRET", ""), "optional shared secret required from clients")
 	publicURL := flag.String("public-url", envOr("ANYSSH_PUBLIC_URL", ""), "public server URL used by the one-line installer")
 	clientRotate := flag.Duration("client-rotate", rotateDefault, "access link rotation interval installed clients will use")
-	notifyURL := flag.String("notify-url", envOr("ANYSSH_NOTIFY_URL", ""), "required notification API URL embedded in downloaded clients")
-	notifyUser := flag.String("notify-user", envOr("ANYSSH_NOTIFY_USER", ""), "required notification API user embedded in downloaded clients")
+	dataFile := flag.String("data-file", envOr("ANYSSH_DATA_FILE", "anyssh-state.json"), "persistent admin settings file")
 	flag.Parse()
 
 	srv, err := appserver.New(appserver.Config{
 		SharedSecret: *secret,
 		PublicURL:    *publicURL,
 		ClientRotate: *clientRotate,
-		NotifyURL:    *notifyURL,
-		NotifyUser:   *notifyUser,
+		DataFile:     *dataFile,
 	})
 	if err != nil {
 		slog.Error("initialize server", "error", err)

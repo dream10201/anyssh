@@ -1,14 +1,12 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -29,8 +27,6 @@ type Config struct {
 	ServerURL   string
 	PublicURL   string
 	RotateEvery time.Duration
-	NotifyURL   string
-	NotifyUser  string
 	Secret      string
 	Shell       string
 	Logger      *slog.Logger
@@ -38,10 +34,10 @@ type Config struct {
 
 type Client struct {
 	cfg       Config
+	device    deviceInfo
 	serverURL *url.URL
 	publicURL *url.URL
 	logger    *slog.Logger
-	http      *http.Client
 }
 
 func New(cfg Config) (*Client, error) {
@@ -59,9 +55,6 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("public URL: %w", err)
 	}
-	if cfg.NotifyURL == "" || cfg.NotifyUser == "" {
-		return nil, errors.New("notify URL and user are required")
-	}
 	if cfg.Shell == "" {
 		cfg.Shell = defaultShell()
 	}
@@ -71,10 +64,10 @@ func New(cfg Config) (*Client, error) {
 	}
 	return &Client{
 		cfg:       cfg,
+		device:    detectDeviceInfo(),
 		serverURL: serverURL,
 		publicURL: publicURL,
 		logger:    logger,
-		http:      &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }
 
@@ -104,39 +97,49 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		cycleCtx, cancel := context.WithTimeout(ctx, c.cfg.RotateEvery)
 		link := strings.TrimRight(c.publicURL.String(), "/") + "/s/" + token + "/"
-		c.logger.Info("new access link", "url", link, "valid_for", c.cfg.RotateEvery)
-		registered := make(chan struct{})
-		go c.notifyAfterRegistration(cycleCtx, registered, link)
-		c.keepRegistered(cycleCtx, token, registered)
+		c.logger.Info("new access link", "url", link, "device", c.device.ID, "valid_for", c.cfg.RotateEvery)
+		if c.keepRegistered(cycleCtx, token) {
+			cancel()
+			continue
+		}
 		cancel()
 	}
 	return ctx.Err()
 }
 
-func (c *Client) keepRegistered(ctx context.Context, token string, registered chan struct{}) {
+var errRotate = errors.New("rotate requested")
+
+func (c *Client) keepRegistered(ctx context.Context, token string) bool {
 	backoff := time.Second
-	var registeredOnce sync.Once
 	for ctx.Err() == nil {
 		ws, err := c.dial(ctx, "/api/register", url.Values{"token": {token}}, http.Header{
-			"X-AnySSH-Secret": []string{c.cfg.Secret},
+			"X-AnySSH-Secret":          []string{c.cfg.Secret},
+			"X-AnySSH-Device-ID":       []string{c.device.ID},
+			"X-AnySSH-Device-Hostname": []string{c.device.Hostname},
+			"X-AnySSH-Device-User":     []string{c.device.Username},
+			"X-AnySSH-Device-OS":       []string{c.device.OS},
+			"X-AnySSH-Device-Arch":     []string{c.device.Arch},
 		})
 		if err != nil {
 			c.logger.Warn("connect to server failed", "error", err, "retry_in", backoff)
 			if !wait(ctx, backoff) {
-				return
+				return false
 			}
 			backoff = min(backoff*2, 30*time.Second)
 			continue
 		}
 		backoff = time.Second
-		registeredOnce.Do(func() { close(registered) })
 		c.logger.Info("connected to server")
 		err = c.serveControl(ctx, ws)
 		_ = ws.Close()
+		if errors.Is(err, errRotate) {
+			return true
+		}
 		if err != nil && ctx.Err() == nil {
 			c.logger.Warn("server connection closed", "error", err)
 		}
 	}
+	return false
 }
 
 func (c *Client) serveControl(ctx context.Context, ws *websocket.Conn) error {
@@ -150,6 +153,9 @@ func (c *Client) serveControl(ctx context.Context, ws *websocket.Conn) error {
 			}
 			if msg.Type == "open" && msg.SessionID != "" && msg.Key != "" {
 				go c.runSession(ctx, msg.SessionID, msg.Key)
+			} else if msg.Type == "rotate" {
+				done <- errRotate
+				return
 			}
 		}
 	}()
@@ -281,56 +287,6 @@ func loginEnvironment(shell string) []string {
 		result = append(result, key+"="+value)
 	}
 	return result
-}
-
-func (c *Client) notifyAfterRegistration(ctx context.Context, registered <-chan struct{}, link string) {
-	select {
-	case <-ctx.Done():
-		return
-	case <-registered:
-		c.notifyUntilSent(ctx, link)
-	}
-}
-
-func (c *Client) notifyUntilSent(ctx context.Context, link string) {
-	backoff := time.Second
-	for ctx.Err() == nil {
-		if err := c.notify(ctx, link); err == nil {
-			c.logger.Info("access link sent to notification API")
-			return
-		} else {
-			c.logger.Warn("notification failed", "error", err, "retry_in", backoff)
-		}
-		if !wait(ctx, backoff) {
-			return
-		}
-		backoff = min(backoff*2, time.Minute)
-	}
-}
-
-func (c *Client) notify(ctx context.Context, link string) error {
-	body, err := json.Marshal(struct {
-		User string `json:"user"`
-		Msg  string `json:"msg"`
-	}{User: c.cfg.NotifyUser, Msg: link})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.NotifyURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("notification API returned %s", resp.Status)
-	}
-	return nil
 }
 
 func (c *Client) dial(ctx context.Context, path string, query url.Values, header http.Header) (*websocket.Conn, error) {

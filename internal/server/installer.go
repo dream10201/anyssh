@@ -69,11 +69,9 @@ func (s *Server) configuredClient(r *http.Request, arch string) ([]byte, error) 
 		return nil, fmt.Errorf("read embedded client: %w", err)
 	}
 	return bootstrap.Append(binary, bootstrap.Config{
-		ServerURL:  s.installServerURL(r),
-		Secret:     s.secret,
-		Rotate:     s.clientRotate.String(),
-		NotifyURL:  s.notifyURL,
-		NotifyUser: s.notifyUser,
+		ServerURL: s.installServerURL(r),
+		Secret:    s.secret,
+		Rotate:    s.clientRotate.String(),
 	})
 }
 

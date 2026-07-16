@@ -44,15 +44,13 @@ func embeddedClientConfig() (appclient.Config, error) {
 	if err != nil || rotate <= 0 {
 		return appclient.Config{}, errors.New("invalid embedded rotation interval")
 	}
-	if embedded.ServerURL == "" || embedded.NotifyURL == "" || embedded.NotifyUser == "" {
-		return appclient.Config{}, errors.New("embedded server and notification parameters are required")
+	if embedded.ServerURL == "" {
+		return appclient.Config{}, errors.New("embedded server parameter is required")
 	}
 	return appclient.Config{
 		ServerURL:   embedded.ServerURL,
 		PublicURL:   embedded.ServerURL,
 		RotateEvery: rotate,
-		NotifyURL:   embedded.NotifyURL,
-		NotifyUser:  embedded.NotifyUser,
 		Secret:      embedded.Secret,
 	}, nil
 }

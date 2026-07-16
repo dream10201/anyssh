@@ -33,15 +33,12 @@ bin/anyssh-server
   -listen :8080 \
   -public-url http://1.2.3.4:8080 \
   -client-rotate 30m \
-  -notify-url https://notify.example.com \
-  -notify-user your-user \
   -secret '替换成一个足够长的随机密钥'
 ```
 
 - `-public-url` 是安装后的客户端连接地址，也是通知消息中链接的地址。
 - `-client-rotate` 控制通过该服务端安装的客户端多久更换一次链接。
-- `-notify-url` 和 `-notify-user` 是必填项，缺少任意一项时服务端拒绝启动。
-- `-secret` 会由服务端写入下载客户端的二进制尾部，安装用户无需输入。
+- `-secret` 是客户端注册服务端时使用的共享密钥，不是 Web 终端链接。多个客户端可使用同一个密钥，但会分别生成独立的 256 位随机链接。
 
 ## 容器运行
 
@@ -52,10 +49,9 @@ docker run -d \
   --name anyssh \
   --restart unless-stopped \
   -p 8080:8080 \
+  -v anyssh-data:/data \
   -e ANYSSH_PUBLIC_URL=http://1.2.3.4:8080 \
   -e ANYSSH_CLIENT_ROTATE=30m \
-  -e ANYSSH_NOTIFY_URL=https://notify.example.com \
-  -e ANYSSH_NOTIFY_USER=your-user \
   -e ANYSSH_SECRET='替换成一个足够长的随机密钥' \
   ghcr.io/dream10201/anyssh:latest
 ```
@@ -64,12 +60,11 @@ docker run -d \
 
 | 变量 | 是否必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `ANYSSH_NOTIFY_URL` | 是 | 无 | 通知 API 的 HTTP(S) 地址 |
-| `ANYSSH_NOTIFY_USER` | 是 | 无 | 通知 API 用户 |
 | `ANYSSH_LISTEN` | 否 | `:8080` | 容器监听地址 |
 | `ANYSSH_PUBLIC_URL` | 否 | 按请求推导 | 客户端及浏览器访问的公网地址 |
 | `ANYSSH_CLIENT_ROTATE` | 否 | `1h` | 随机链接轮换周期 |
 | `ANYSSH_SECRET` | 否 | 空 | 客户端注册共享密钥 |
+| `ANYSSH_DATA_FILE` | 否 | 容器内 `/data/state.json` | 管理设置状态文件 |
 
 GitHub Action 会发布 `linux/amd64`、`linux/arm64` 多平台镜像到 GHCR。每个镜像中的服务端都携带上述 13 种 Linux 客户端。
 
@@ -81,7 +76,7 @@ GitHub Action 会发布 `linux/amd64`、`linux/arm64` 多平台镜像到 GHCR。
 curl -fsSL http://1.2.3.4:8080/install | bash
 ```
 
-客户端没有命令行配置入口。服务端会在下载时把连接地址、共享密钥、轮换周期、通知地址和通知用户写入客户端二进制尾部；脚本下载后校验 SHA-256 并立即后台启动，不生成配置文件。构建过程中产生的基础客户端没有 trailer，无法单独运行。
+客户端没有命令行配置入口。服务端会在下载时把连接地址、共享密钥和轮换周期写入客户端二进制尾部；脚本下载后校验 SHA-256 并立即后台启动，不生成配置文件。构建过程中产生的基础客户端没有 trailer，无法单独运行。
 
 需要开机自启时建议使用 root 安装：
 
@@ -94,13 +89,13 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 - systemd 日志：`journalctl -u anyssh-client`。
 - 普通用户日志：`~/.local/share/anyssh/client.log`。
 
-客户端连接成功后会按服务端配置发送以下 JSON，失败时自动退避重试：
+## 管理后台与企业微信
 
-```json
-{"user":"your-user","msg":"http://1.2.3.4:8080/s/<随机字符串>/"}
-```
+打开 `http://服务端地址/admin/` 可以查看当前连接客户端、设备信息及各自链接，并执行禁用、设置链接过期时间和立即更换链接。多个客户端使用相同 `ANYSSH_SECRET` 时仍会显示为不同设备和不同链接。
 
-通知地址和用户没有默认值，必须在服务端提供。随后下载的客户端会自动携带这些值。
+后台可配置企业微信群机器人的完整 Webhook URL并发送测试消息。新链接通知包含主机名、系统用户、系统架构、匿名设备 ID 和访问链接。Webhook 持久化在状态文件中。
+
+当前管理后台按你的要求没有登录验证。公网部署时必须通过防火墙、VPN 或反向代理访问控制限制 `/admin/` 和 `/api/admin/`。
 
 ## HTTPS 部署
 
@@ -111,8 +106,6 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
   -listen :8080 \
   -public-url https://ssh.example.com \
   -client-rotate 30m \
-  -notify-url https://notify.example.com \
-  -notify-user your-user \
   -secret '替换成一个足够长的随机密钥'
 ```
 

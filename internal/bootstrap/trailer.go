@@ -18,11 +18,9 @@ const (
 )
 
 type Config struct {
-	ServerURL  string `json:"server_url"`
-	Rotate     string `json:"rotate,omitempty"`
-	NotifyURL  string `json:"notify_url,omitempty"`
-	NotifyUser string `json:"notify_user,omitempty"`
-	Secret     string `json:"secret,omitempty"`
+	ServerURL string `json:"server_url"`
+	Rotate    string `json:"rotate,omitempty"`
+	Secret    string `json:"secret,omitempty"`
 }
 
 func Append(binaryData []byte, cfg Config) ([]byte, error) {

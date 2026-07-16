@@ -20,15 +20,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-//go:embed web/* assets/*
+//go:embed web/* admin/* assets/*
 var webFiles embed.FS
 
 type Config struct {
 	SharedSecret string
 	PublicURL    string
 	ClientRotate time.Duration
-	NotifyURL    string
-	NotifyUser   string
+	DataFile     string
 	Logger       *slog.Logger
 }
 
@@ -36,8 +35,8 @@ type Server struct {
 	secret       string
 	publicURL    string
 	clientRotate time.Duration
-	notifyURL    string
-	notifyUser   string
+	webhookURL   string
+	dataFile     string
 	logger       *slog.Logger
 	upgrader     websocket.Upgrader
 
@@ -45,11 +44,21 @@ type Server struct {
 	clients map[string]*clientConn
 	pending map[string]*pendingSession
 	web     http.Handler
+	admin   http.Handler
 }
 
 type clientConn struct {
-	token string
-	ws    *websocket.Conn
+	token        string
+	deviceID     string
+	hostname     string
+	username     string
+	osName       string
+	arch         string
+	link         string
+	registeredAt time.Time
+	disabled     bool
+	expiresAt    time.Time
+	ws           *websocket.Conn
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
@@ -71,14 +80,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ClientRotate <= 0 {
 		cfg.ClientRotate = time.Hour
 	}
-	if strings.TrimSpace(cfg.NotifyURL) == "" || strings.TrimSpace(cfg.NotifyUser) == "" {
-		return nil, errors.New("notify URL and notify user are required")
-	}
-	notifyURL, err := url.Parse(cfg.NotifyURL)
-	if err != nil || (notifyURL.Scheme != "http" && notifyURL.Scheme != "https") || notifyURL.Host == "" {
-		return nil, errors.New("notify URL must be an absolute http(s) URL")
-	}
 	assets, err := fs.Sub(webFiles, "web")
+	if err != nil {
+		return nil, err
+	}
+	adminAssets, err := fs.Sub(webFiles, "admin")
 	if err != nil {
 		return nil, err
 	}
@@ -86,11 +92,13 @@ func New(cfg Config) (*Server, error) {
 		secret:       cfg.SharedSecret,
 		publicURL:    strings.TrimRight(cfg.PublicURL, "/"),
 		clientRotate: cfg.ClientRotate,
-		notifyURL:    cfg.NotifyURL,
-		notifyUser:   cfg.NotifyUser,
+		dataFile:     cfg.DataFile,
 		logger:       logger,
 		clients:      make(map[string]*clientConn),
 		pending:      make(map[string]*pendingSession),
+	}
+	if err := s.loadSettings(); err != nil {
+		return nil, err
 	}
 	if s.publicURL != "" {
 		u, err := url.Parse(s.publicURL)
@@ -99,6 +107,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	s.web = http.FileServer(http.FS(assets))
+	s.admin = http.FileServer(http.FS(adminAssets))
 	s.upgrader = websocket.Upgrader{CheckOrigin: sameOrigin}
 	return s, nil
 }
@@ -110,6 +119,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/download/anyssh-client", s.handleClientDownload)
 	mux.HandleFunc("/download/anyssh-client/", s.handleClientDownload)
 	mux.HandleFunc("/install", s.handleInstall)
+	mux.HandleFunc("/admin/", s.handleAdminPage)
+	mux.HandleFunc("/api/admin/clients", s.handleAdminClients)
+	mux.HandleFunc("/api/admin/clients/", s.handleAdminClientAction)
+	mux.HandleFunc("/api/admin/settings", s.handleAdminSettings)
+	mux.HandleFunc("/api/admin/settings/test", s.handleAdminNotificationTest)
 	mux.HandleFunc("/s/", s.handlePublic)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -136,7 +150,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c := &clientConn{token: token, ws: ws, sockets: make(map[*websocket.Conn]struct{})}
+	c := &clientConn{
+		token: token, deviceID: cleanHeader(r.Header.Get("X-AnySSH-Device-ID"), token[:16]),
+		hostname:     cleanHeader(r.Header.Get("X-AnySSH-Device-Hostname"), "unknown"),
+		username:     cleanHeader(r.Header.Get("X-AnySSH-Device-User"), "unknown"),
+		osName:       cleanHeader(r.Header.Get("X-AnySSH-Device-OS"), "unknown"),
+		arch:         cleanHeader(r.Header.Get("X-AnySSH-Device-Arch"), "unknown"),
+		link:         strings.TrimRight(s.installServerURL(r), "/") + "/s/" + token + "/",
+		registeredAt: time.Now(), ws: ws, sockets: make(map[*websocket.Conn]struct{}),
+	}
 
 	s.mu.Lock()
 	old := s.clients[token]
@@ -146,6 +168,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		old.close()
 	}
 	s.logger.Info("client registered", "token_prefix", token[:8])
+	go s.notifyClientLink(c)
 
 	ws.SetReadLimit(4096)
 	_ = ws.SetReadDeadline(time.Now().Add(70 * time.Second))
@@ -176,7 +199,7 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
 		return
 	}
-	if s.getClient(token) == nil {
+	if c := s.getClient(token); c == nil || !c.available() {
 		http.Error(w, "link expired or client offline", http.StatusNotFound)
 		return
 	}
@@ -191,7 +214,7 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBrowserSession(w http.ResponseWriter, r *http.Request, token string) {
 	c := s.getClient(token)
-	if c == nil {
+	if c == nil || !c.available() {
 		http.Error(w, "link expired or client offline", http.StatusNotFound)
 		return
 	}

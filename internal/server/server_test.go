@@ -20,14 +20,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	testNotifyURL  = "https://notify.example.com"
-	testNotifyUser = "test-user"
-)
-
 func TestRegistrationPageAndSessionProxy(t *testing.T) {
 	t.Parallel()
-	srv, err := New(Config{NotifyURL: testNotifyURL, NotifyUser: testNotifyUser})
+	srv, err := New(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +89,7 @@ func TestRegistrationPageAndSessionProxy(t *testing.T) {
 
 func TestSharedSecretAndExpiredLink(t *testing.T) {
 	t.Parallel()
-	srv, err := New(Config{SharedSecret: "server-secret", NotifyURL: testNotifyURL, NotifyUser: testNotifyUser})
+	srv, err := New(Config{SharedSecret: "server-secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +242,7 @@ func writeExecutable(t *testing.T, path, content string) {
 
 func TestInstallServerURL(t *testing.T) {
 	t.Parallel()
-	srv, err := New(Config{PublicURL: "https://configured.example.com/", NotifyURL: testNotifyURL, NotifyUser: testNotifyUser})
+	srv, err := New(Config{PublicURL: "https://configured.example.com/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +251,7 @@ func TestInstallServerURL(t *testing.T) {
 		t.Fatalf("configured public URL: %q", got)
 	}
 
-	srv, err = New(Config{NotifyURL: testNotifyURL, NotifyUser: testNotifyUser})
+	srv, err = New(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +264,7 @@ func TestInstallServerURL(t *testing.T) {
 
 func TestConfiguredClientTrailer(t *testing.T) {
 	t.Parallel()
-	srv, err := New(Config{PublicURL: "https://ssh.example.com", SharedSecret: "secret", ClientRotate: 20 * time.Minute, NotifyURL: testNotifyURL, NotifyUser: testNotifyUser})
+	srv, err := New(Config{PublicURL: "https://ssh.example.com", SharedSecret: "secret", ClientRotate: 20 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +278,7 @@ func TestConfiguredClientTrailer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("architecture %s: %v", arch, err)
 		}
-		if !found || cfg.ServerURL != "https://ssh.example.com" || cfg.Secret != "secret" || cfg.Rotate != "20m0s" || cfg.NotifyURL != testNotifyURL || cfg.NotifyUser != testNotifyUser {
+		if !found || cfg.ServerURL != "https://ssh.example.com" || cfg.Secret != "secret" || cfg.Rotate != "20m0s" {
 			t.Fatalf("architecture %s: unexpected trailer: found=%v config=%+v", arch, found, cfg)
 		}
 	}
@@ -293,7 +288,7 @@ func TestConfiguredClientIsExecutable(t *testing.T) {
 	if runtime.GOOS != "linux" || !validClientArchitecture(runtime.GOARCH) {
 		t.Skip("ELF trailer execution test requires a supported Linux client")
 	}
-	srv, err := New(Config{PublicURL: "http://127.0.0.1:1", ClientRotate: 10 * time.Minute, NotifyURL: testNotifyURL, NotifyUser: testNotifyUser})
+	srv, err := New(Config{PublicURL: "http://127.0.0.1:1", ClientRotate: 10 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,12 +309,113 @@ func TestConfiguredClientIsExecutable(t *testing.T) {
 	}
 }
 
-func TestNotificationParametersAreRequired(t *testing.T) {
-	t.Parallel()
-	if _, err := New(Config{}); err == nil {
-		t.Fatal("expected missing notification parameters to be rejected")
+func TestAdminClientControls(t *testing.T) {
+	srv, err := New(Config{PublicURL: "http://ssh.example.com"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := New(Config{NotifyURL: testNotifyURL}); err == nil {
-		t.Fatal("expected missing notification user to be rejected")
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	page, err := http.Get(httpServer.URL + "/admin/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(page.Body)
+	_ = page.Body.Close()
+	if page.StatusCode != http.StatusOK || !bytes.Contains(data, []byte("AnySSH")) {
+		t.Fatalf("admin page: %d %s", page.StatusCode, data)
+	}
+	token := strings.Repeat("c", 64)
+	headers := http.Header{"X-AnySSH-Device-ID": []string{"device-1"}, "X-AnySSH-Device-Hostname": []string{"server-a"}, "X-AnySSH-Device-User": []string{"deploy"}, "X-AnySSH-Device-OS": []string{"linux"}, "X-AnySSH-Device-Arch": []string{"arm64"}}
+	control, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http")+"/api/register?token="+token, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	resp, err := http.Get(httpServer.URL + "/api/admin/clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clients []adminClient
+	if json.NewDecoder(resp.Body).Decode(&clients) != nil {
+		t.Fatal("decode clients")
+	}
+	_ = resp.Body.Close()
+	if len(clients) != 1 || clients[0].Hostname != "server-a" || clients[0].Arch != "arm64" {
+		t.Fatalf("clients: %+v", clients)
+	}
+	postJSON(t, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":true}`)
+	linkResp, err := http.Get(httpServer.URL + "/s/" + token + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = linkResp.Body.Close()
+	if linkResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("disabled link status %d", linkResp.StatusCode)
+	}
+	postJSON(t, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":false}`)
+	postJSON(t, httpServer.URL+"/api/admin/clients/device-1/rotate", `{}`)
+	var message protocol.ControlMessage
+	if control.ReadJSON(&message) != nil || message.Type != "rotate" {
+		t.Fatalf("rotate message: %+v", message)
+	}
+}
+
+func TestWeComWebhookPayload(t *testing.T) {
+	var payload map[string]any
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer endpoint.Close()
+	srv, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.webhookURL = endpoint.URL
+	if err := srv.postWeCom("test content"); err != nil {
+		t.Fatal(err)
+	}
+	markdown, ok := payload["markdown"].(map[string]any)
+	if payload["msgtype"] != "markdown" || !ok || markdown["content"] != "test content" {
+		t.Fatalf("payload: %#v", payload)
+	}
+	if validateWebhook("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test") == nil {
+	} else {
+		t.Fatal("official webhook rejected")
+	}
+}
+
+func TestSettingsPersistence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	srv, err := New(Config{DataFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.webhookURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+	if err := srv.saveSettings(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(Config{DataFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.webhookURL != srv.webhookURL {
+		t.Fatalf("webhook was not persisted: %q", reloaded.webhookURL)
+	}
+}
+
+func postJSON(t *testing.T, url, body string) {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST %s: %d %s", url, resp.StatusCode, data)
 	}
 }

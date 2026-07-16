@@ -15,13 +15,45 @@ fi
 
 mkdir -p "${BIN_DIR}"
 
-echo "Building Linux clients (amd64, arm64, armv5+)..."
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-amd64" "${ROOT_DIR}/cmd/anyssh-client"
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-  go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-arm64" "${ROOT_DIR}/cmd/anyssh-client"
-CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 \
-  go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-arm" "${ROOT_DIR}/cmd/anyssh-client"
+CLIENT_ARCHES=(386 amd64 arm arm64 loong64 mips mips64 mips64le mipsle ppc64 ppc64le riscv64 s390x)
+
+echo "Building Linux clients (${CLIENT_ARCHES[*]})..."
+build_client() {
+  local arch="$1"
+  case "${arch}" in
+    386)
+      CGO_ENABLED=0 GOOS=linux GOARCH=386 GO386=softfloat \
+        go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-${arch}" "${ROOT_DIR}/cmd/anyssh-client"
+      ;;
+    arm)
+      CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 \
+        go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-${arch}" "${ROOT_DIR}/cmd/anyssh-client"
+      ;;
+    mips|mipsle)
+      CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" GOMIPS=softfloat \
+        go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-${arch}" "${ROOT_DIR}/cmd/anyssh-client"
+      ;;
+    mips64|mips64le)
+      CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" GOMIPS64=softfloat \
+        go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-${arch}" "${ROOT_DIR}/cmd/anyssh-client"
+      ;;
+    *)
+      CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+        go build -trimpath -o "${CLIENT_ASSET_DIR}/anyssh-client-linux-${arch}" "${ROOT_DIR}/cmd/anyssh-client"
+      ;;
+  esac
+}
+
+pids=()
+for arch in "${CLIENT_ARCHES[@]}"; do
+  build_client "${arch}" &
+  pids+=("$!")
+  if (( ${#pids[@]} == 4 )); then
+    for pid in "${pids[@]}"; do wait "${pid}"; done
+    pids=()
+  fi
+done
+for pid in "${pids[@]}"; do wait "${pid}"; done
 rm -f "${CLIENT_ASSET_DIR}/anyssh-client"
 rm -f "${BIN_DIR}/anyssh-client"
 

@@ -153,22 +153,35 @@ func responseStatus(resp *http.Response) any {
 
 func TestInstallScript(t *testing.T) {
 	t.Parallel()
-	script := renderInstallScript(
-		"https://ssh.example.com",
-		strings.Repeat("a", 64),
-		strings.Repeat("b", 64),
-		strings.Repeat("c", 64),
-	)
+	checksums := make(map[string]string, len(clientArchitectures))
+	for _, arch := range clientArchitectures {
+		checksums[arch] = strings.Repeat("a", 64)
+	}
+	script := renderInstallScript("https://ssh.example.com", checksums)
 	for _, want := range []string{
 		"SERVER_URL='https://ssh.example.com'",
 		"download/anyssh-client/$ACTUAL_ARCH",
-		"armv7l|armhf",
+		"armv5*|armv6*|armv7*",
+		"command -v arch",
+		"busybox uname -m",
+		"dpkg --print-architecture",
+		"rpm --eval '%{_arch}'",
+		"apk --print-arch",
+		"getconf \"$key\"",
+		"/proc/cpuinfo",
+		"elf_arch",
+		"od -An -tu1 -j18 -N2",
 		"sha256sum -c -",
 		"systemctl enable --now anyssh-client.service",
 		"nohup",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("installer does not contain %q", want)
+		}
+	}
+	for _, arch := range clientArchitectures {
+		if !strings.Contains(script, "  "+arch+") EXPECTED_SHA256=") {
+			t.Errorf("installer is missing checksum branch for %s", arch)
 		}
 	}
 	for _, unwanted := range []string{"CONFIG_BASE64", "/etc/anyssh", ".config/anyssh"} {
@@ -180,6 +193,55 @@ func TestInstallScript(t *testing.T) {
 	cmd.Stdin = strings.NewReader(script)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("invalid installer shell syntax: %v\n%s", err, output)
+	}
+}
+
+func TestArchitectureDetectionWithoutUname(t *testing.T) {
+	t.Parallel()
+	checksums := make(map[string]string, len(clientArchitectures))
+	for _, arch := range clientArchitectures {
+		checksums[arch] = strings.Repeat("a", 64)
+	}
+	script := renderInstallScript("https://ssh.example.com", checksums)
+	start := strings.Index(script, "normalize_arch() {")
+	end := strings.Index(script, "TMP_FILE=")
+	if start < 0 || end <= start {
+		t.Fatal("cannot locate architecture detector in installer")
+	}
+	detector := script[start:end] + "\nprintf '%s\\n' \"$ACTUAL_ARCH\"\n"
+
+	t.Run("dpkg", func(t *testing.T) {
+		binDir := t.TempDir()
+		writeExecutable(t, filepath.Join(binDir, "dpkg"), "#!/bin/sh\necho riscv64\n")
+		cmd := exec.Command("/bin/bash", "-c", detector)
+		cmd.Env = []string{"PATH=" + binDir}
+		output, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(output)) != "riscv64" {
+			t.Fatalf("dpkg fallback: err=%v output=%q", err, output)
+		}
+	})
+
+	t.Run("elf", func(t *testing.T) {
+		binDir := t.TempDir()
+		writeExecutable(t, filepath.Join(binDir, "od"), `#!/bin/sh
+case "$*" in
+  *-j4*) echo "2 1" ;;
+  *-j18*) echo "62 0" ;;
+esac
+`)
+		cmd := exec.Command("/bin/bash", "-c", detector)
+		cmd.Env = []string{"PATH=" + binDir}
+		output, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(output)) != "amd64" {
+			t.Fatalf("ELF fallback: err=%v output=%q", err, output)
+		}
+	})
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+		t.Fatal(err)
 	}
 }
 

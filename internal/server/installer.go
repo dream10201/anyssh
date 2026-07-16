@@ -12,7 +12,10 @@ import (
 	"anyssh/internal/bootstrap"
 )
 
-var clientArchitectures = []string{"amd64", "arm64", "arm"}
+var clientArchitectures = []string{
+	"386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le",
+	"mipsle", "ppc64", "ppc64le", "riscv64", "s390x",
+}
 
 func (s *Server) handleClientDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -21,7 +24,7 @@ func (s *Server) handleClientDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	arch := strings.TrimPrefix(r.URL.Path, "/download/anyssh-client/")
 	if r.URL.Path == "/download/anyssh-client" || !validClientArchitecture(arch) {
-		http.Error(w, "client architecture must be amd64, arm64, or arm", http.StatusBadRequest)
+		http.Error(w, "unsupported client architecture", http.StatusBadRequest)
 		return
 	}
 	binary, err := s.configuredClient(r, arch)
@@ -51,12 +54,7 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		sum := sha256.Sum256(binary)
 		checksums[arch] = hex.EncodeToString(sum[:])
 	}
-	script := renderInstallScript(
-		serverURL,
-		checksums["amd64"],
-		checksums["arm64"],
-		checksums["arm"],
-	)
+	script := renderInstallScript(serverURL, checksums)
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(script))
@@ -106,25 +104,103 @@ func (s *Server) installServerURL(r *http.Request) string {
 	return scheme + "://" + host
 }
 
-func renderInstallScript(serverURL, checksumAMD64, checksumARM64, checksumARM string) string {
+func renderInstallScript(serverURL string, checksums map[string]string) string {
+	var checksumCases strings.Builder
+	for _, arch := range clientArchitectures {
+		fmt.Fprintf(&checksumCases, "  %s) EXPECTED_SHA256=%s ;;\n", arch, shellQuote(checksums[arch]))
+	}
 	return fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 
 SERVER_URL=%s
-SHA256_AMD64=%s
-SHA256_ARM64=%s
-SHA256_ARM=%s
 
 fail() { echo "anyssh install: $*" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
 
-case "$(uname -s)" in Linux) ;; *) fail "only Linux clients are supported" ;; esac
-case "$(uname -m)" in
-  x86_64|amd64) ACTUAL_ARCH=amd64; EXPECTED_SHA256="$SHA256_AMD64" ;;
-  aarch64|arm64) ACTUAL_ARCH=arm64; EXPECTED_SHA256="$SHA256_ARM64" ;;
-  arm|armv5l|armv6l|armv7l|armhf) ACTUAL_ARCH=arm; EXPECTED_SHA256="$SHA256_ARM" ;;
-  *) fail "unsupported architecture: $(uname -m)" ;;
+normalize_arch() {
+  local raw="${1,,}"
+  raw="${raw#"${raw%%%%[![:space:]]*}"}"
+  raw="${raw%%"${raw##*[![:space:]]}"}"
+  case "$raw" in
+    i386|i486|i586|i686|x86) echo 386 ;;
+    x86_64|x86-64|amd64) echo amd64 ;;
+    arm|armel|armhf|armv5*|armv6*|armv7*|armv8l) echo arm ;;
+    aarch64|arm64) echo arm64 ;;
+    loongarch64|loong64) echo loong64 ;;
+    mips64el|mips64le) echo mips64le ;;
+    mips64) echo mips64 ;;
+    mipsel|mipsle) echo mipsle ;;
+    mips) echo mips ;;
+    ppc64el|ppc64le) echo ppc64le ;;
+    ppc64) echo ppc64 ;;
+    riscv64|rv64*) echo riscv64 ;;
+    s390x) echo s390x ;;
+    *) return 1 ;;
+  esac
+}
+
+elf_arch() {
+  command -v od >/dev/null 2>&1 || return 1
+  local elf=/bin/sh class data b1 b2 machine
+  [[ -r "$elf" ]] || elf=/proc/self/exe
+  [[ -r "$elf" ]] || return 1
+  read -r class data < <(od -An -tu1 -j4 -N2 "$elf") || return 1
+  read -r b1 b2 < <(od -An -tu1 -j18 -N2 "$elf") || return 1
+  [[ -n "$class" && -n "$data" && -n "$b1" && -n "$b2" ]] || return 1
+  if [[ "$data" == 1 ]]; then machine=$((b1 + b2 * 256)); else machine=$((b1 * 256 + b2)); fi
+  case "$machine:$class:$data" in
+    3:1:1) echo 386 ;;
+    8:1:1) echo mipsle ;;
+    8:1:2) echo mips ;;
+    8:2:1) echo mips64le ;;
+    8:2:2) echo mips64 ;;
+    21:2:1) echo ppc64le ;;
+    21:2:2) echo ppc64 ;;
+    22:2:*) echo s390x ;;
+    40:1:1) echo arm ;;
+    62:2:1) echo amd64 ;;
+    183:2:1) echo arm64 ;;
+    243:2:1) echo riscv64 ;;
+    258:2:1) echo loong64 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_arch() {
+  local raw key
+  if command -v uname >/dev/null 2>&1; then
+    raw="$(uname -m 2>/dev/null || true)"; normalize_arch "$raw" && return
+  fi
+  if command -v arch >/dev/null 2>&1; then
+    raw="$(arch 2>/dev/null || true)"; normalize_arch "$raw" && return
+  fi
+  if command -v busybox >/dev/null 2>&1; then
+    raw="$(busybox uname -m 2>/dev/null || true)"; normalize_arch "$raw" && return
+  fi
+  if command -v dpkg >/dev/null 2>&1; then
+    raw="$(dpkg --print-architecture 2>/dev/null || true)"; normalize_arch "$raw" && return
+  fi
+  if command -v rpm >/dev/null 2>&1; then
+    raw="$(rpm --eval '%%{_arch}' 2>/dev/null || true)"; normalize_arch "$raw" && return
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    raw="$(apk --print-arch 2>/dev/null || true)"; normalize_arch "$raw" && return
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    for key in MACHINE_ARCH HOSTTYPE; do
+      raw="$(getconf "$key" 2>/dev/null || true)"; normalize_arch "$raw" && return
+    done
+  fi
+  if [[ -r /proc/cpuinfo ]]; then
+    while IFS=: read -r key raw; do normalize_arch "$raw" && return; done < /proc/cpuinfo
+  fi
+  elf_arch
+}
+
+ACTUAL_ARCH="$(detect_arch)" || fail "cannot detect a supported Linux architecture"
+case "$ACTUAL_ARCH" in
+%s  *) fail "unsupported architecture: $ACTUAL_ARCH" ;;
 esac
 
 TMP_FILE="$(mktemp)"
@@ -180,7 +256,7 @@ else
   echo $! > "$INSTALL_DIR/client.pid"
   echo "AnySSH client installed and started in the background (PID $!)."
 fi
-`, shellQuote(serverURL), shellQuote(checksumAMD64), shellQuote(checksumARM64), shellQuote(checksumARM))
+`, shellQuote(serverURL), checksumCases.String())
 }
 
 func shellQuote(value string) string {

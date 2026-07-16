@@ -34,12 +34,13 @@ type Config struct {
 }
 
 type Client struct {
-	cfg       Config
-	device    deviceInfo
-	serverURL *url.URL
-	publicURL *url.URL
-	logger    *slog.Logger
-	rotation  atomic.Int64
+	cfg             Config
+	device          deviceInfo
+	serverURL       *url.URL
+	publicURL       *url.URL
+	logger          *slog.Logger
+	rotation        atomic.Int64
+	rotationVersion atomic.Int64
 }
 
 func New(cfg Config) (*Client, error) {
@@ -148,6 +149,8 @@ func (c *Client) keepRegistered(ctx context.Context, token string) bool {
 			"X-AnySSH-Device-User":     []string{c.device.Username},
 			"X-AnySSH-Device-OS":       []string{c.device.OS},
 			"X-AnySSH-Device-Arch":     []string{c.device.Arch},
+			"X-AnySSH-Rotate-Seconds":  []string{fmt.Sprint(c.rotation.Load() / int64(time.Second))},
+			"X-AnySSH-Rotate-Version":  []string{fmt.Sprint(c.rotationVersion.Load())},
 		})
 		if err != nil {
 			c.logger.Warn("connect to server failed", "error", err, "retry_in", backoff)
@@ -185,8 +188,9 @@ func (c *Client) serveControl(ctx context.Context, ws *websocket.Conn) error {
 			} else if msg.Type == "rotate" {
 				done <- errRotate
 				return
-			} else if msg.Type == "set_rotate" && msg.RotateSeconds >= 0 {
+			} else if msg.Type == "set_rotate" && msg.RotateSeconds >= 0 && msg.RotateVersion >= c.rotationVersion.Load() {
 				c.rotation.Store(msg.RotateSeconds * int64(time.Second))
+				c.rotationVersion.Store(msg.RotateVersion)
 				c.logger.Info("link rotation updated", "interval", time.Duration(c.rotation.Load()))
 			}
 		}

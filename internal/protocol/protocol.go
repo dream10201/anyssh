@@ -10,6 +10,7 @@ type ControlMessage struct {
 	SessionID     string `json:"session_id,omitempty"`
 	Key           string `json:"key,omitempty"`
 	RotateSeconds int64  `json:"rotate_seconds,omitempty"`
+	RotateVersion int64  `json:"rotate_version,omitempty"`
 }
 
 type Resize struct {

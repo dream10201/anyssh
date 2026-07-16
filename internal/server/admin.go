@@ -100,13 +100,18 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		s.clientRotate = time.Duration(body.RotateSeconds) * time.Second
+		version := time.Now().UnixNano()
+		if version <= s.rotationVersion {
+			version = s.rotationVersion + 1
+		}
+		s.rotationVersion = version
 		clients := make([]*clientConn, 0, len(s.clients))
 		for _, c := range s.clients {
 			clients = append(clients, c)
 		}
 		s.mu.Unlock()
 		for _, c := range clients {
-			_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds})
+			_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds, RotateVersion: version})
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 	default:

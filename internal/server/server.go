@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,13 +33,14 @@ type Config struct {
 }
 
 type Server struct {
-	secret        string
-	publicURL     string
-	clientRotate  time.Duration
-	weComKey      string
-	weComEndpoint string
-	logger        *slog.Logger
-	upgrader      websocket.Upgrader
+	secret          string
+	publicURL       string
+	clientRotate    time.Duration
+	rotationVersion int64
+	weComKey        string
+	weComEndpoint   string
+	logger          *slog.Logger
+	upgrader        websocket.Upgrader
 
 	mu      sync.Mutex
 	clients map[string]*clientConn
@@ -160,18 +162,29 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		registeredAt: time.Now(), ws: ws, sockets: make(map[*websocket.Conn]struct{}),
 	}
 
+	reportedSeconds, secondsErr := strconv.ParseInt(r.Header.Get("X-AnySSH-Rotate-Seconds"), 10, 64)
+	reportedVersion, versionErr := strconv.ParseInt(r.Header.Get("X-AnySSH-Rotate-Version"), 10, 64)
 	s.mu.Lock()
 	old := s.clients[token]
 	s.clients[token] = c
+	if secondsErr == nil && versionErr == nil && reportedSeconds >= 0 && reportedVersion > s.rotationVersion {
+		s.clientRotate = time.Duration(reportedSeconds) * time.Second
+		s.rotationVersion = reportedVersion
+	}
+	rotateSeconds := int64(s.clientRotate / time.Second)
+	rotateVersion := s.rotationVersion
+	clients := make([]*clientConn, 0, len(s.clients))
+	for _, current := range s.clients {
+		clients = append(clients, current)
+	}
 	s.mu.Unlock()
 	if old != nil {
 		old.close()
 	}
 	s.logger.Info("client registered", "token_prefix", token[:8])
-	s.mu.Lock()
-	rotateSeconds := int64(s.clientRotate / time.Second)
-	s.mu.Unlock()
-	_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: rotateSeconds})
+	for _, current := range clients {
+		_ = current.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: rotateSeconds, RotateVersion: rotateVersion})
+	}
 	go s.notifyClientLink(c)
 
 	ws.SetReadLimit(4096)

@@ -112,6 +112,10 @@ func New(cfg Config) (*Server, error) {
 		if err := s.saveSettings(); err != nil {
 			return nil, err
 		}
+	} else if cfg.SharedSecret != "" {
+		if err := s.saveSettings(); err != nil {
+			return nil, err
+		}
 	}
 	if s.publicURL != "" {
 		u, err := url.Parse(s.publicURL)

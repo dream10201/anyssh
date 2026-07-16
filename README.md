@@ -51,6 +51,7 @@ docker run -d \
   -v anyssh-data:/data \
   -e ANYSSH_PUBLIC_URL=http://1.2.3.4:8080 \
   -e ANYSSH_CLIENT_ROTATE=30m \
+  -e ANYSSH_SECRET='可选的客户端注册密钥' \
   -e ANYSSH_WECOM_KEY='企业微信群机器人 key' \
   ghcr.io/dream10201/anyssh:latest
 ```
@@ -62,6 +63,7 @@ docker run -d \
 | `ANYSSH_LISTEN` | 否 | `:8080` | 容器监听地址 |
 | `ANYSSH_PUBLIC_URL` | 否 | 按请求推导 | 客户端及浏览器访问的公网地址 |
 | `ANYSSH_CLIENT_ROTATE` | 否 | `1h` | 随机链接轮换周期 |
+| `ANYSSH_SECRET` | 否 | 自动生成 | 客户端注册密钥；修改后旧密钥客户端无法重连 |
 | `ANYSSH_WECOM_KEY` | 否 | 空 | 企业微信群机器人 Webhook 中的 `key` 参数 |
 | `ANYSSH_DATA_FILE` | 否 | 容器内 `/data/state.json` | 管理设置状态文件 |
 

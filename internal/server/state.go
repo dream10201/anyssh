@@ -27,7 +27,9 @@ func (s *Server) loadSettings() error {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return fmt.Errorf("decode state file: %w", err)
 	}
-	s.secret = settings.Secret
+	if s.secret == "" {
+		s.secret = settings.Secret
+	}
 	return nil
 }
 

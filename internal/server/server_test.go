@@ -405,6 +405,31 @@ func TestSettingsPersistence(t *testing.T) {
 	}
 }
 
+func TestExplicitSecretOverridesPersistedSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	first, err := New(Config{DataFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.secret == "" {
+		t.Fatal("automatic secret was not generated")
+	}
+	overridden, err := New(Config{DataFile: path, SharedSecret: "replacement-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overridden.secret != "replacement-secret" {
+		t.Fatal("explicit secret did not override state")
+	}
+	reloaded, err := New(Config{DataFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.secret != "replacement-secret" {
+		t.Fatalf("override was not persisted: %q", reloaded.secret)
+	}
+}
+
 func postJSON(t *testing.T, url, body string) {
 	t.Helper()
 	resp, err := http.Post(url, "application/json", strings.NewReader(body))

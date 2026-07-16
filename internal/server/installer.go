@@ -114,6 +114,18 @@ set -f
 SERVER_URL=%s
 
 fail() { echo "anyssh install: $*" >&2; exit 1; }
+remove_file() { if command -v rm >/dev/null 2>&1; then rm -f "$1"; elif command -v busybox >/dev/null 2>&1; then busybox rm -f "$1"; else echo "anyssh install: WARNING: cannot remove $1" >&2; fi; }
+make_dir() { if command -v mkdir >/dev/null 2>&1; then mkdir -p "$1"; elif command -v busybox >/dev/null 2>&1; then busybox mkdir -p "$1"; else fail "mkdir or BusyBox mkdir is required"; fi; }
+copy_file() { if command -v cp >/dev/null 2>&1; then cp "$1" "$2"; elif command -v busybox >/dev/null 2>&1; then busybox cp "$1" "$2"; elif command -v dd >/dev/null 2>&1; then dd if="$1" of="$2" bs=65536 2>/dev/null; else fail "cp, dd, or BusyBox cp is required"; fi; }
+set_mode() { if command -v chmod >/dev/null 2>&1; then chmod "$1" "$2"; elif command -v busybox >/dev/null 2>&1; then busybox chmod "$1" "$2"; else fail "chmod or BusyBox chmod is required"; fi; }
+install_file() { if command -v install >/dev/null 2>&1; then install -m 0755 "$1" "$2"; else copy_file "$1" "$2"; set_mode 0755 "$2"; fi; }
+write_stream() { if command -v cat >/dev/null 2>&1; then cat > "$1"; elif command -v busybox >/dev/null 2>&1; then busybox cat > "$1"; else return 1; fi; }
+get_uid() {
+  if command -v id >/dev/null 2>&1; then id -u; return
+  elif command -v busybox >/dev/null 2>&1; then busybox id -u; return
+  elif [ -r /proc/self/status ]; then while read -r key real effective rest; do [ "$key" = "Uid:" ] && { echo "$effective"; return; }; done < /proc/self/status; fi
+  echo 1
+}
 download() {
   if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
   elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
@@ -130,7 +142,7 @@ start_background() {
   executable="$1"; log_file="$2"; pid_file="$3"
   if command -v nohup >/dev/null 2>&1; then nohup "$executable" >> "$log_file" 2>&1 < /dev/null &
   elif command -v busybox >/dev/null 2>&1; then busybox nohup "$executable" >> "$log_file" 2>&1 < /dev/null &
-  else fail "nohup or BusyBox nohup is required"; fi
+  else echo "anyssh install: WARNING: nohup is unavailable; using plain background mode" >&2; "$executable" >> "$log_file" 2>&1 < /dev/null & fi
   new_pid=$!
   echo "$new_pid" > "$pid_file"
   echo "AnySSH client installed or updated and restarted in the background (PID $new_pid)."
@@ -157,10 +169,12 @@ normalize_arch() {
 }
 
 elf_arch() {
-  command -v od >/dev/null 2>&1 || return 1
+  if command -v od >/dev/null 2>&1; then OD=od
+  elif command -v busybox >/dev/null 2>&1; then OD="busybox od"
+  else return 1; fi
   elf=/bin/sh; [ -r "$elf" ] || elf=/proc/self/exe; [ -r "$elf" ] || return 1
-  set -- $(od -An -tu1 -j4 -N2 "$elf") || return 1; class="${1:-}"; data="${2:-}"
-  set -- $(od -An -tu1 -j18 -N2 "$elf") || return 1; b1="${1:-}"; b2="${2:-}"
+  set -- $($OD -An -tu1 -j4 -N2 "$elf") || return 1; class="${1:-}"; data="${2:-}"
+  set -- $($OD -An -tu1 -j18 -N2 "$elf") || return 1; b1="${1:-}"; b2="${2:-}"
   [ -n "$class" ] && [ -n "$data" ] && [ -n "$b1" ] && [ -n "$b2" ] || return 1
   if [ "$data" = 1 ]; then machine=$((b1 + b2 * 256)); else machine=$((b1 * 256 + b2)); fi
   case "$machine:$class:$data" in
@@ -217,25 +231,24 @@ case "$ACTUAL_ARCH" in
 esac
 
 if command -v mktemp >/dev/null 2>&1; then TMP_FILE="$(mktemp)"; else TMP_FILE="${TMPDIR:-/tmp}/anyssh-client.$$"; fi
-trap 'rm -f "$TMP_FILE"' 0 HUP INT TERM
+trap 'remove_file "$TMP_FILE"' 0 HUP INT TERM
 download "$SERVER_URL/download/anyssh-client/$ACTUAL_ARCH" "$TMP_FILE"
 verify_sha256 "$EXPECTED_SHA256" "$TMP_FILE"
-chmod 0755 "$TMP_FILE"
 
 stop_pid_file() {
   pid_file="$1"; expected_exe="$2"
   [ -f "$pid_file" ] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || :)"
-  case "$pid" in ''|*[!0-9]*) rm -f "$pid_file"; return 0 ;; esac
+  pid=""; IFS= read -r pid < "$pid_file" || :
+  case "$pid" in ''|*[!0-9]*) remove_file "$pid_file"; return 0 ;; esac
   if ! kill -0 "$pid" 2>/dev/null; then
-    rm -f "$pid_file"
+    remove_file "$pid_file"
     return 0
   fi
   if [ -e "/proc/$pid/exe" ] && command -v readlink >/dev/null 2>&1; then
     current_exe="$(readlink "/proc/$pid/exe" 2>/dev/null || :)"
     if [ "$current_exe" != "$expected_exe" ] && [ "$current_exe" != "$expected_exe (deleted)" ]; then
       echo "Skipping stale PID file $pid_file (PID $pid belongs to $current_exe)" >&2
-      rm -f "$pid_file"
+      remove_file "$pid_file"
       return 0
     fi
   fi
@@ -243,32 +256,31 @@ stop_pid_file() {
   attempts=0
   while [ "$attempts" -lt 5 ]; do
     kill -0 "$pid" 2>/dev/null || break
-    sleep 1
+    if command -v sleep >/dev/null 2>&1; then sleep 1; elif command -v busybox >/dev/null 2>&1; then busybox sleep 1; else break; fi
     attempts=$((attempts + 1))
   done
   kill -9 "$pid" 2>/dev/null || :
-  rm -f "$pid_file"
+  remove_file "$pid_file"
 }
 
-if [ "$(id -u)" -eq 0 ]; then
+if [ "$(get_uid)" -eq 0 ]; then
   TARGET_USER="${SUDO_USER:-root}"
   TARGET_HOME=""
   if command -v getent >/dev/null 2>&1 && command -v cut >/dev/null 2>&1; then TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"; fi
   if [ -z "$TARGET_HOME" ] && [ -r /etc/passwd ]; then
-    while IFS=: read -r name _ _ _ _ home _; do [ "$name" = "$TARGET_USER" ] && TARGET_HOME="$home"; done < /etc/passwd
+    while IFS=: read -r name _ _ _ _ home _; do if [ "$name" = "$TARGET_USER" ]; then TARGET_HOME="$home"; fi; done < /etc/passwd
   fi
-  [ -n "$TARGET_HOME" ] || fail "cannot determine home directory for $TARGET_USER"
+  if [ -z "$TARGET_HOME" ]; then echo "anyssh install: WARNING: cannot determine home for $TARGET_USER; using /root" >&2; TARGET_USER=root; TARGET_HOME=/root; fi
   USE_SYSTEMD=0
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     USE_SYSTEMD=1
     systemctl stop anyssh-client.service 2>/dev/null || :
   fi
   stop_pid_file /run/anyssh-client.pid /usr/local/bin/anyssh-client
-  mkdir -p /usr/local/bin
-  cp "$TMP_FILE" /usr/local/bin/anyssh-client
-  chmod 0755 /usr/local/bin/anyssh-client
+  make_dir /usr/local/bin
+  install_file "$TMP_FILE" /usr/local/bin/anyssh-client
   if [ "$USE_SYSTEMD" -eq 1 ]; then
-    cat > /etc/systemd/system/anyssh-client.service <<UNIT
+    if write_stream /etc/systemd/system/anyssh-client.service <<UNIT
 [Unit]
 Description=AnySSH reverse web terminal client
 After=network-online.target
@@ -286,20 +298,26 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-    systemctl daemon-reload
-    systemctl enable anyssh-client.service
-    systemctl restart anyssh-client.service
-    echo "AnySSH client installed or updated and restarted with systemd."
+    then
+      if systemctl daemon-reload && systemctl enable anyssh-client.service && systemctl restart anyssh-client.service; then
+        echo "AnySSH client installed or updated and restarted with systemd."
+      else
+        echo "anyssh install: WARNING: systemd start failed; using background mode" >&2
+        start_background /usr/local/bin/anyssh-client /var/log/anyssh-client.log /run/anyssh-client.pid
+      fi
+    else
+      echo "anyssh install: WARNING: cannot write systemd unit; using background mode" >&2
+      start_background /usr/local/bin/anyssh-client /var/log/anyssh-client.log /run/anyssh-client.pid
+    fi
   else
     start_background /usr/local/bin/anyssh-client /var/log/anyssh-client.log /run/anyssh-client.pid
   fi
 else
-  INSTALL_DIR="$HOME/.local/share/anyssh"
-  mkdir -p "$INSTALL_DIR"
-  chmod 0700 "$INSTALL_DIR"
+  INSTALL_DIR="${HOME:-${TMPDIR:-/tmp}}/.local/share/anyssh"
+  make_dir "$INSTALL_DIR"
+  set_mode 0700 "$INSTALL_DIR"
   stop_pid_file "$INSTALL_DIR/client.pid" "$INSTALL_DIR/anyssh-client"
-  cp "$TMP_FILE" "$INSTALL_DIR/anyssh-client"
-  chmod 0755 "$INSTALL_DIR/anyssh-client"
+  install_file "$TMP_FILE" "$INSTALL_DIR/anyssh-client"
   start_background "$INSTALL_DIR/anyssh-client" "$INSTALL_DIR/client.log" "$INSTALL_DIR/client.pid"
 fi
 `, shellQuote(serverURL), checksumCases.String())

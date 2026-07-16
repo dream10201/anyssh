@@ -87,7 +87,7 @@ curl -fsSL http://1.2.3.4:8080/install | sh
 wget -qO- http://1.2.3.4:8080/install | sh
 ```
 
-脚本支持 curl、wget 或 BusyBox wget 下载。若存在 sha256sum、BusyBox sha256sum 或 OpenSSL，会自动校验下载内容；三者都不存在时会显示安全警告但继续安装。目标系统仍需提供 `/bin/sh`、`cp`、`chmod`、`mkdir`、`nohup` 等基础工具。
+脚本支持 curl、wget 或 BusyBox wget 下载。若存在 sha256sum、BusyBox sha256sum 或 OpenSSL，会自动校验下载内容；三者都不存在时会显示安全警告但继续安装。cp、chmod、mkdir、rm、od、id、sleep、nohup 等命令缺失时会尝试 install、dd、BusyBox 或安全降级。完全没有下载工具，或没有任何可用的文件落地方式时无法完成安装。
 
 需要开机自启时建议使用 root 安装：
 
@@ -95,8 +95,8 @@ wget -qO- http://1.2.3.4:8080/install | sh
 curl -fsSL http://1.2.3.4:8080/install | sudo bash
 ```
 
-- root 环境优先安装为 `anyssh-client.service` systemd 服务；没有 systemd 时自动使用 `nohup`。
-- 普通用户安装到 `~/.local/share/anyssh` 并通过 `nohup` 启动，不会自动开机启动。
+- root 环境优先安装为 `anyssh-client.service` systemd 服务；没有 systemd 或 systemd 启动失败时自动使用后台模式。
+- 普通用户安装到 `~/.local/share/anyssh` 并在后台启动，不会自动开机启动。
 - systemd 日志：`journalctl -u anyssh-client`。
 - 普通用户日志：`~/.local/share/anyssh/client.log`。
 

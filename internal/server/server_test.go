@@ -170,19 +170,25 @@ func TestInstallScript(t *testing.T) {
 		"getconf \"$key\"",
 		"/proc/cpuinfo",
 		"elf_arch",
-		"od -An -tu1 -j18 -N2",
+		"$OD -An -tu1 -j18 -N2",
 		"sha256sum -c -",
 		"systemctl stop anyssh-client.service",
 		"systemctl restart anyssh-client.service",
 		"stop_pid_file",
 		"nohup",
+		"using plain background mode",
+		"busybox cp",
+		"busybox chmod",
+		"busybox mkdir",
+		"/proc/self/status",
+		"systemd start failed; using background mode",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("installer does not contain %q", want)
 		}
 	}
 	stopIndex := strings.Index(script, "systemctl stop anyssh-client.service")
-	installIndex := strings.Index(script, `cp "$TMP_FILE" /usr/local/bin/anyssh-client`)
+	installIndex := strings.Index(script, `install_file "$TMP_FILE" /usr/local/bin/anyssh-client`)
 	restartIndex := strings.Index(script, "systemctl restart anyssh-client.service")
 	if stopIndex < 0 || installIndex <= stopIndex || restartIndex <= installIndex {
 		t.Fatal("systemd update must stop, replace, then restart")

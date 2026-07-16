@@ -170,59 +170,8 @@ func (s *Server) clientByDevice(id string) *clientConn {
 	return nil
 }
 
-func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		s.mu.Lock()
-		value := s.webhookURL
-		s.mu.Unlock()
-		writeJSON(w, map[string]string{"webhook_url": value})
-	case http.MethodPut:
-		var body struct {
-			WebhookURL string `json:"webhook_url"`
-		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || (body.WebhookURL != "" && validateWebhook(body.WebhookURL) != nil) {
-			http.Error(w, "invalid enterprise WeChat webhook", 400)
-			return
-		}
-		s.mu.Lock()
-		s.webhookURL = body.WebhookURL
-		s.mu.Unlock()
-		if err := s.saveSettings(); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		writeJSON(w, map[string]bool{"ok": true})
-	default:
-		http.Error(w, "method not allowed", 405)
-	}
-}
-
-func (s *Server) handleAdminNotificationTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	if err := s.postWeCom("AnySSH enterprise WeChat notification test"); err != nil {
-		http.Error(w, err.Error(), 502)
-		return
-	}
-	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func validateWebhook(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host != "qyapi.weixin.qq.com" || u.Path != "/cgi-bin/webhook/send" || u.Query().Get("key") == "" {
-		return errors.New("invalid webhook")
-	}
-	return nil
-}
-
 func (s *Server) notifyClientLink(c *clientConn) {
-	s.mu.Lock()
-	configured := s.webhookURL != ""
-	s.mu.Unlock()
-	if !configured {
+	if s.weComKey == "" {
 		return
 	}
 	content := fmt.Sprintf("## AnySSH new link\n> Device: %s\n> User: %s\n> System: %s/%s\n> ID: %s\n[Open terminal](%s)", c.hostname, c.username, c.osName, c.arch, c.deviceID, c.link)
@@ -232,12 +181,10 @@ func (s *Server) notifyClientLink(c *clientConn) {
 }
 
 func (s *Server) postWeCom(content string) error {
-	s.mu.Lock()
-	hook := s.webhookURL
-	s.mu.Unlock()
-	if hook == "" {
-		return errors.New("webhook is not configured")
+	if s.weComKey == "" {
+		return errors.New("ANYSSH_WECOM_KEY is not configured")
 	}
+	hook := s.weComEndpoint + "?key=" + url.QueryEscape(s.weComKey)
 	body, _ := json.Marshal(map[string]any{"msgtype": "markdown", "markdown": map[string]string{"content": content}})
 	resp, err := http.Post(hook, "application/json", bytes.NewReader(body))
 	if err != nil {

@@ -19,14 +19,14 @@ func main() {
 		os.Exit(2)
 	}
 	listen := flag.String("listen", envOr("ANYSSH_LISTEN", ":8080"), "HTTP listen address")
-	secret := flag.String("secret", envOr("ANYSSH_SECRET", ""), "optional shared secret required from clients")
 	publicURL := flag.String("public-url", envOr("ANYSSH_PUBLIC_URL", ""), "public server URL used by the one-line installer")
 	clientRotate := flag.Duration("client-rotate", rotateDefault, "access link rotation interval installed clients will use")
 	dataFile := flag.String("data-file", envOr("ANYSSH_DATA_FILE", "anyssh-state.json"), "persistent admin settings file")
+	weComKey := envOr("ANYSSH_WECOM_KEY", "")
 	flag.Parse()
 
 	srv, err := appserver.New(appserver.Config{
-		SharedSecret: *secret,
+		WeComKey:     weComKey,
 		PublicURL:    *publicURL,
 		ClientRotate: *clientRotate,
 		DataFile:     *dataFile,

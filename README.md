@@ -32,13 +32,12 @@ bin/anyssh-server
 ./bin/anyssh-server \
   -listen :8080 \
   -public-url http://1.2.3.4:8080 \
-  -client-rotate 30m \
-  -secret '替换成一个足够长的随机密钥'
+  -client-rotate 30m
 ```
 
 - `-public-url` 是安装后的客户端连接地址，也是通知消息中链接的地址。
 - `-client-rotate` 控制通过该服务端安装的客户端多久更换一次链接。
-- `-secret` 是客户端注册服务端时使用的共享密钥，不是 Web 终端链接。多个客户端可使用同一个密钥，但会分别生成独立的 256 位随机链接。
+- 客户端注册密钥由服务端首次启动时自动生成并保存在状态文件中。删除状态文件会使已有客户端下次重连失败。
 
 ## 容器运行
 
@@ -52,7 +51,7 @@ docker run -d \
   -v anyssh-data:/data \
   -e ANYSSH_PUBLIC_URL=http://1.2.3.4:8080 \
   -e ANYSSH_CLIENT_ROTATE=30m \
-  -e ANYSSH_SECRET='替换成一个足够长的随机密钥' \
+  -e ANYSSH_WECOM_KEY='企业微信群机器人 key' \
   ghcr.io/dream10201/anyssh:latest
 ```
 
@@ -63,7 +62,7 @@ docker run -d \
 | `ANYSSH_LISTEN` | 否 | `:8080` | 容器监听地址 |
 | `ANYSSH_PUBLIC_URL` | 否 | 按请求推导 | 客户端及浏览器访问的公网地址 |
 | `ANYSSH_CLIENT_ROTATE` | 否 | `1h` | 随机链接轮换周期 |
-| `ANYSSH_SECRET` | 否 | 空 | 客户端注册共享密钥 |
+| `ANYSSH_WECOM_KEY` | 否 | 空 | 企业微信群机器人 Webhook 中的 `key` 参数 |
 | `ANYSSH_DATA_FILE` | 否 | 容器内 `/data/state.json` | 管理设置状态文件 |
 
 GitHub Action 会发布 `linux/amd64`、`linux/arm64` 多平台镜像到 GHCR。每个镜像中的服务端都携带上述 13 种 Linux 客户端。
@@ -91,9 +90,9 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 
 ## 管理后台与企业微信
 
-打开 `http://服务端地址/admin/` 可以查看当前连接客户端、设备信息及各自链接，并执行禁用、设置链接过期时间和立即更换链接。多个客户端使用相同 `ANYSSH_SECRET` 时仍会显示为不同设备和不同链接。
+打开 `http://服务端地址/admin/` 可以查看当前连接客户端、设备信息及各自链接，并执行禁用、设置链接过期时间和立即更换链接。每个客户端都会生成独立链接。
 
-后台可配置企业微信群机器人的完整 Webhook URL并发送测试消息。新链接通知包含主机名、系统用户、系统架构、匿名设备 ID 和访问链接。Webhook 持久化在状态文件中。
+设置 `ANYSSH_WECOM_KEY` 后，新链接会通过企业微信群机器人通知，内容包含主机名、系统用户、系统架构、匿名设备 ID 和访问链接。服务端使用固定官方地址 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=KEY`。
 
 当前管理后台按你的要求没有登录验证。公网部署时必须通过防火墙、VPN 或反向代理访问控制限制 `/admin/` 和 `/api/admin/`。
 
@@ -105,8 +104,7 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 ./bin/anyssh-server \
   -listen :8080 \
   -public-url https://ssh.example.com \
-  -client-rotate 30m \
-  -secret '替换成一个足够长的随机密钥'
+  -client-rotate 30m
 ```
 
 客户端安装命令相应变为：

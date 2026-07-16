@@ -31,7 +31,8 @@ func TestRegistrationPageAndSessionProxy(t *testing.T) {
 	wsBase := "ws" + strings.TrimPrefix(httpServer.URL, "http")
 	token := strings.Repeat("a", 64)
 
-	control, _, err := websocket.DefaultDialer.Dial(wsBase+"/api/register?token="+token, nil)
+	registerHeader := http.Header{"X-AnySSH-Secret": []string{srv.secret}}
+	control, _, err := websocket.DefaultDialer.Dial(wsBase+"/api/register?token="+token, registerHeader)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -327,6 +328,7 @@ func TestAdminClientControls(t *testing.T) {
 	}
 	token := strings.Repeat("c", 64)
 	headers := http.Header{"X-AnySSH-Device-ID": []string{"device-1"}, "X-AnySSH-Device-Hostname": []string{"server-a"}, "X-AnySSH-Device-User": []string{"deploy"}, "X-AnySSH-Device-OS": []string{"linux"}, "X-AnySSH-Device-Arch": []string{"arm64"}}
+	headers.Set("X-AnySSH-Secret", srv.secret)
 	control, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http")+"/api/register?token="+token, headers)
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +376,8 @@ func TestWeComWebhookPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv.webhookURL = endpoint.URL
+	srv.weComEndpoint = endpoint.URL
+	srv.weComKey = "test-key"
 	if err := srv.postWeCom("test content"); err != nil {
 		t.Fatal(err)
 	}
@@ -382,9 +385,8 @@ func TestWeComWebhookPayload(t *testing.T) {
 	if payload["msgtype"] != "markdown" || !ok || markdown["content"] != "test content" {
 		t.Fatalf("payload: %#v", payload)
 	}
-	if validateWebhook("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test") == nil {
-	} else {
-		t.Fatal("official webhook rejected")
+	if payload["msgtype"] != "markdown" {
+		t.Fatal("unexpected message type")
 	}
 }
 
@@ -394,16 +396,12 @@ func TestSettingsPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv.webhookURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
-	if err := srv.saveSettings(); err != nil {
-		t.Fatal(err)
-	}
 	reloaded, err := New(Config{DataFile: path})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.webhookURL != srv.webhookURL {
-		t.Fatalf("webhook was not persisted: %q", reloaded.webhookURL)
+	if reloaded.secret != srv.secret || reloaded.secret == "" {
+		t.Fatalf("generated client secret was not persisted")
 	}
 }
 

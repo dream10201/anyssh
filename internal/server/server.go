@@ -25,6 +25,7 @@ var webFiles embed.FS
 
 type Config struct {
 	SharedSecret string
+	WeComKey     string
 	PublicURL    string
 	ClientRotate time.Duration
 	DataFile     string
@@ -32,13 +33,14 @@ type Config struct {
 }
 
 type Server struct {
-	secret       string
-	publicURL    string
-	clientRotate time.Duration
-	webhookURL   string
-	dataFile     string
-	logger       *slog.Logger
-	upgrader     websocket.Upgrader
+	secret        string
+	publicURL     string
+	clientRotate  time.Duration
+	weComKey      string
+	weComEndpoint string
+	dataFile      string
+	logger        *slog.Logger
+	upgrader      websocket.Upgrader
 
 	mu      sync.Mutex
 	clients map[string]*clientConn
@@ -89,16 +91,27 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		secret:       cfg.SharedSecret,
-		publicURL:    strings.TrimRight(cfg.PublicURL, "/"),
-		clientRotate: cfg.ClientRotate,
-		dataFile:     cfg.DataFile,
-		logger:       logger,
-		clients:      make(map[string]*clientConn),
-		pending:      make(map[string]*pendingSession),
+		secret:        cfg.SharedSecret,
+		weComKey:      cfg.WeComKey,
+		weComEndpoint: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send",
+		publicURL:     strings.TrimRight(cfg.PublicURL, "/"),
+		clientRotate:  cfg.ClientRotate,
+		dataFile:      cfg.DataFile,
+		logger:        logger,
+		clients:       make(map[string]*clientConn),
+		pending:       make(map[string]*pendingSession),
 	}
 	if err := s.loadSettings(); err != nil {
 		return nil, err
+	}
+	if s.secret == "" {
+		s.secret, err = randomHex(32)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.saveSettings(); err != nil {
+			return nil, err
+		}
 	}
 	if s.publicURL != "" {
 		u, err := url.Parse(s.publicURL)
@@ -122,8 +135,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/", s.handleAdminPage)
 	mux.HandleFunc("/api/admin/clients", s.handleAdminClients)
 	mux.HandleFunc("/api/admin/clients/", s.handleAdminClientAction)
-	mux.HandleFunc("/api/admin/settings", s.handleAdminSettings)
-	mux.HandleFunc("/api/admin/settings/test", s.handleAdminNotificationTest)
 	mux.HandleFunc("/s/", s.handlePublic)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

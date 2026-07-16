@@ -9,7 +9,7 @@ import (
 )
 
 type savedSettings struct {
-	WebhookURL string `json:"wecom_webhook_url"`
+	Secret string `json:"client_secret"`
 }
 
 func (s *Server) loadSettings() error {
@@ -27,10 +27,7 @@ func (s *Server) loadSettings() error {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return fmt.Errorf("decode state file: %w", err)
 	}
-	if settings.WebhookURL != "" && validateWebhook(settings.WebhookURL) != nil {
-		return errors.New("state file contains an invalid enterprise WeChat webhook")
-	}
-	s.webhookURL = settings.WebhookURL
+	s.secret = settings.Secret
 	return nil
 }
 
@@ -39,7 +36,7 @@ func (s *Server) saveSettings() error {
 		return nil
 	}
 	s.mu.Lock()
-	settings := savedSettings{WebhookURL: s.webhookURL}
+	settings := savedSettings{Secret: s.secret}
 	s.mu.Unlock()
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

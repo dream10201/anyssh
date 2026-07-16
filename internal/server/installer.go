@@ -124,7 +124,7 @@ verify_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then echo "$1  $2" | sha256sum -c - >/dev/null
   elif command -v busybox >/dev/null 2>&1; then echo "$1  $2" | busybox sha256sum -c - >/dev/null
   elif command -v openssl >/dev/null 2>&1; then actual=""; for word in $(openssl dgst -sha256 "$2"); do actual="$word"; done; [ "$actual" = "$1" ]
-  else fail "sha256sum, BusyBox sha256sum, or OpenSSL is required"; fi || fail "client checksum verification failed"
+  else echo "anyssh install: WARNING: no SHA-256 tool found; installing without download verification" >&2; return 0; fi || fail "client checksum verification failed"
 }
 start_background() {
   executable="$1"; log_file="$2"; pid_file="$3"

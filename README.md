@@ -87,7 +87,7 @@ curl -fsSL http://1.2.3.4:8080/install | sh
 wget -qO- http://1.2.3.4:8080/install | sh
 ```
 
-脚本支持 curl、wget 或 BusyBox wget 下载，并支持 sha256sum、BusyBox sha256sum 或 OpenSSL 校验。目标系统仍需提供 `/bin/sh`、`cp`、`chmod`、`mkdir`、`nohup` 等基础工具。
+脚本支持 curl、wget 或 BusyBox wget 下载。若存在 sha256sum、BusyBox sha256sum 或 OpenSSL，会自动校验下载内容；三者都不存在时会显示安全警告但继续安装。目标系统仍需提供 `/bin/sh`、`cp`、`chmod`、`mkdir`、`nohup` 等基础工具。
 
 需要开机自启时建议使用 root 安装：
 

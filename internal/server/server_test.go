@@ -159,6 +159,7 @@ func TestInstallScript(t *testing.T) {
 		"SERVER_URL='https://ssh.example.com'",
 		"wget -qO",
 		"openssl dgst -sha256",
+		"installing without download verification",
 		"download/anyssh-client/$ACTUAL_ARCH",
 		"armv5*|armv6*|armv7*",
 		"command -v arch",

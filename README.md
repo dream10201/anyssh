@@ -74,12 +74,20 @@ GitHub Action 会发布 `linux/amd64`、`linux/arm64` 多平台镜像到 GHCR。
 在需要被控制的 Linux 机器上执行：
 
 ```bash
-curl -fsSL http://1.2.3.4:8080/install | bash
+curl -fsSL http://1.2.3.4:8080/install | sh
 ```
 
 客户端没有命令行配置入口。服务端会在下载时把连接地址、共享密钥和轮换周期写入客户端二进制尾部；脚本下载后校验 SHA-256 并立即后台启动，不生成配置文件。构建过程中产生的基础客户端没有 trailer，无法单独运行。
 
 安装命令可以重复执行。若检测到已有客户端，脚本会先停止旧 systemd 服务或 PID 文件对应的后台进程，再替换二进制并重新启动；因此也可用同一条命令完成客户端更新。
+
+安装脚本兼容 POSIX `/bin/sh`，不要求 Bash。没有 curl 时可以使用：
+
+```bash
+wget -qO- http://1.2.3.4:8080/install | sh
+```
+
+脚本支持 curl、wget 或 BusyBox wget 下载，并支持 sha256sum、BusyBox sha256sum 或 OpenSSL 校验。目标系统仍需提供 `/bin/sh`、`cp`、`chmod`、`mkdir`、`nohup` 等基础工具。
 
 需要开机自启时建议使用 root 安装：
 
@@ -114,7 +122,7 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 客户端安装命令相应变为：
 
 ```bash
-curl -fsSL https://ssh.example.com/install | bash
+curl -fsSL https://ssh.example.com/install | sh
 ```
 
 健康检查地址是 `/healthz`。

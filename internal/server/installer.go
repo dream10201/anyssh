@@ -107,19 +107,37 @@ func renderInstallScript(serverURL string, checksums map[string]string) string {
 	for _, arch := range clientArchitectures {
 		fmt.Fprintf(&checksumCases, "  %s) EXPECTED_SHA256=%s ;;\n", arch, shellQuote(checksums[arch]))
 	}
-	return fmt.Sprintf(`#!/usr/bin/env bash
-set -euo pipefail
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+set -f
 
 SERVER_URL=%s
 
 fail() { echo "anyssh install: $*" >&2; exit 1; }
-command -v curl >/dev/null 2>&1 || fail "curl is required"
-command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
+download() {
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+  elif command -v busybox >/dev/null 2>&1; then busybox wget -qO "$2" "$1"
+  else fail "curl, wget, or BusyBox wget is required"; fi
+}
+verify_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then echo "$1  $2" | sha256sum -c - >/dev/null
+  elif command -v busybox >/dev/null 2>&1; then echo "$1  $2" | busybox sha256sum -c - >/dev/null
+  elif command -v openssl >/dev/null 2>&1; then actual=""; for word in $(openssl dgst -sha256 "$2"); do actual="$word"; done; [ "$actual" = "$1" ]
+  else fail "sha256sum, BusyBox sha256sum, or OpenSSL is required"; fi || fail "client checksum verification failed"
+}
+start_background() {
+  executable="$1"; log_file="$2"; pid_file="$3"
+  if command -v nohup >/dev/null 2>&1; then nohup "$executable" >> "$log_file" 2>&1 < /dev/null &
+  elif command -v busybox >/dev/null 2>&1; then busybox nohup "$executable" >> "$log_file" 2>&1 < /dev/null &
+  else fail "nohup or BusyBox nohup is required"; fi
+  new_pid=$!
+  echo "$new_pid" > "$pid_file"
+  echo "AnySSH client installed or updated and restarted in the background (PID $new_pid)."
+}
 
 normalize_arch() {
-  local raw="${1,,}"
-  raw="${raw#"${raw%%%%[![:space:]]*}"}"
-  raw="${raw%%"${raw##*[![:space:]]}"}"
+  raw="$1"; set -- $raw; raw="${1:-}"
   case "$raw" in
     i386|i486|i586|i686|x86) echo 386 ;;
     x86_64|x86-64|amd64) echo amd64 ;;
@@ -140,13 +158,11 @@ normalize_arch() {
 
 elf_arch() {
   command -v od >/dev/null 2>&1 || return 1
-  local elf=/bin/sh class data b1 b2 machine
-  [[ -r "$elf" ]] || elf=/proc/self/exe
-  [[ -r "$elf" ]] || return 1
-  read -r class data < <(od -An -tu1 -j4 -N2 "$elf") || return 1
-  read -r b1 b2 < <(od -An -tu1 -j18 -N2 "$elf") || return 1
-  [[ -n "$class" && -n "$data" && -n "$b1" && -n "$b2" ]] || return 1
-  if [[ "$data" == 1 ]]; then machine=$((b1 + b2 * 256)); else machine=$((b1 * 256 + b2)); fi
+  elf=/bin/sh; [ -r "$elf" ] || elf=/proc/self/exe; [ -r "$elf" ] || return 1
+  set -- $(od -An -tu1 -j4 -N2 "$elf") || return 1; class="${1:-}"; data="${2:-}"
+  set -- $(od -An -tu1 -j18 -N2 "$elf") || return 1; b1="${1:-}"; b2="${2:-}"
+  [ -n "$class" ] && [ -n "$data" ] && [ -n "$b1" ] && [ -n "$b2" ] || return 1
+  if [ "$data" = 1 ]; then machine=$((b1 + b2 * 256)); else machine=$((b1 * 256 + b2)); fi
   case "$machine:$class:$data" in
     3:1:1) echo 386 ;;
     8:1:1) echo mipsle ;;
@@ -166,31 +182,30 @@ elf_arch() {
 }
 
 detect_arch() {
-  local raw key
   if command -v uname >/dev/null 2>&1; then
-    raw="$(uname -m 2>/dev/null || true)"; normalize_arch "$raw" && return
+    raw="$(uname -m 2>/dev/null || :)"; normalize_arch "$raw" && return
   fi
   if command -v arch >/dev/null 2>&1; then
-    raw="$(arch 2>/dev/null || true)"; normalize_arch "$raw" && return
+    raw="$(arch 2>/dev/null || :)"; normalize_arch "$raw" && return
   fi
   if command -v busybox >/dev/null 2>&1; then
-    raw="$(busybox uname -m 2>/dev/null || true)"; normalize_arch "$raw" && return
+    raw="$(busybox uname -m 2>/dev/null || :)"; normalize_arch "$raw" && return
   fi
   if command -v dpkg >/dev/null 2>&1; then
-    raw="$(dpkg --print-architecture 2>/dev/null || true)"; normalize_arch "$raw" && return
+    raw="$(dpkg --print-architecture 2>/dev/null || :)"; normalize_arch "$raw" && return
   fi
   if command -v rpm >/dev/null 2>&1; then
-    raw="$(rpm --eval '%%{_arch}' 2>/dev/null || true)"; normalize_arch "$raw" && return
+    raw="$(rpm --eval '%%{_arch}' 2>/dev/null || :)"; normalize_arch "$raw" && return
   fi
   if command -v apk >/dev/null 2>&1; then
-    raw="$(apk --print-arch 2>/dev/null || true)"; normalize_arch "$raw" && return
+    raw="$(apk --print-arch 2>/dev/null || :)"; normalize_arch "$raw" && return
   fi
   if command -v getconf >/dev/null 2>&1; then
     for key in MACHINE_ARCH HOSTTYPE; do
-      raw="$(getconf "$key" 2>/dev/null || true)"; normalize_arch "$raw" && return
+      raw="$(getconf "$key" 2>/dev/null || :)"; normalize_arch "$raw" && return
     done
   fi
-  if [[ -r /proc/cpuinfo ]]; then
+  if [ -r /proc/cpuinfo ]; then
     while IFS=: read -r key raw; do normalize_arch "$raw" && return; done < /proc/cpuinfo
   fi
   elf_arch
@@ -201,49 +216,58 @@ case "$ACTUAL_ARCH" in
 %s  *) fail "unsupported architecture: $ACTUAL_ARCH" ;;
 esac
 
-TMP_FILE="$(mktemp)"
-trap 'rm -f "$TMP_FILE"' EXIT
-curl -fsSL "$SERVER_URL/download/anyssh-client/$ACTUAL_ARCH" -o "$TMP_FILE"
-echo "$EXPECTED_SHA256  $TMP_FILE" | sha256sum -c - >/dev/null
+if command -v mktemp >/dev/null 2>&1; then TMP_FILE="$(mktemp)"; else TMP_FILE="${TMPDIR:-/tmp}/anyssh-client.$$"; fi
+trap 'rm -f "$TMP_FILE"' 0 HUP INT TERM
+download "$SERVER_URL/download/anyssh-client/$ACTUAL_ARCH" "$TMP_FILE"
+verify_sha256 "$EXPECTED_SHA256" "$TMP_FILE"
 chmod 0755 "$TMP_FILE"
 
 stop_pid_file() {
-  local pid_file="$1" expected_exe="$2" pid current_exe
-  [[ -f "$pid_file" ]] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+  pid_file="$1"; expected_exe="$2"
+  [ -f "$pid_file" ] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || :)"
+  case "$pid" in ''|*[!0-9]*) rm -f "$pid_file"; return 0 ;; esac
+  if ! kill -0 "$pid" 2>/dev/null; then
     rm -f "$pid_file"
     return 0
   fi
-  if [[ -e "/proc/$pid/exe" ]] && command -v readlink >/dev/null 2>&1; then
-    current_exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
-    if [[ "$current_exe" != "$expected_exe" && "$current_exe" != "$expected_exe (deleted)" ]]; then
+  if [ -e "/proc/$pid/exe" ] && command -v readlink >/dev/null 2>&1; then
+    current_exe="$(readlink "/proc/$pid/exe" 2>/dev/null || :)"
+    if [ "$current_exe" != "$expected_exe" ] && [ "$current_exe" != "$expected_exe (deleted)" ]; then
       echo "Skipping stale PID file $pid_file (PID $pid belongs to $current_exe)" >&2
       rm -f "$pid_file"
       return 0
     fi
   fi
-  kill "$pid" 2>/dev/null || true
-  for _ in {1..50}; do
+  kill "$pid" 2>/dev/null || :
+  attempts=0
+  while [ "$attempts" -lt 5 ]; do
     kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1
+    sleep 1
+    attempts=$((attempts + 1))
   done
-  kill -9 "$pid" 2>/dev/null || true
+  kill -9 "$pid" 2>/dev/null || :
   rm -f "$pid_file"
 }
 
-if [[ "$(id -u)" -eq 0 ]]; then
+if [ "$(id -u)" -eq 0 ]; then
   TARGET_USER="${SUDO_USER:-root}"
-  TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-  [[ -n "$TARGET_HOME" ]] || fail "cannot determine home directory for $TARGET_USER"
-  USE_SYSTEMD=false
-  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    USE_SYSTEMD=true
-    systemctl stop anyssh-client.service 2>/dev/null || true
+  TARGET_HOME=""
+  if command -v getent >/dev/null 2>&1 && command -v cut >/dev/null 2>&1; then TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"; fi
+  if [ -z "$TARGET_HOME" ] && [ -r /etc/passwd ]; then
+    while IFS=: read -r name _ _ _ _ home _; do [ "$name" = "$TARGET_USER" ] && TARGET_HOME="$home"; done < /etc/passwd
+  fi
+  [ -n "$TARGET_HOME" ] || fail "cannot determine home directory for $TARGET_USER"
+  USE_SYSTEMD=0
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    USE_SYSTEMD=1
+    systemctl stop anyssh-client.service 2>/dev/null || :
   fi
   stop_pid_file /run/anyssh-client.pid /usr/local/bin/anyssh-client
-  install -m 0755 "$TMP_FILE" /usr/local/bin/anyssh-client
-  if [[ "$USE_SYSTEMD" == true ]]; then
+  mkdir -p /usr/local/bin
+  cp "$TMP_FILE" /usr/local/bin/anyssh-client
+  chmod 0755 /usr/local/bin/anyssh-client
+  if [ "$USE_SYSTEMD" -eq 1 ]; then
     cat > /etc/systemd/system/anyssh-client.service <<UNIT
 [Unit]
 Description=AnySSH reverse web terminal client
@@ -267,18 +291,16 @@ UNIT
     systemctl restart anyssh-client.service
     echo "AnySSH client installed or updated and restarted with systemd."
   else
-    nohup /usr/local/bin/anyssh-client >> /var/log/anyssh-client.log 2>&1 < /dev/null &
-    echo $! > /run/anyssh-client.pid
-    echo "AnySSH client installed or updated and restarted in the background (PID $!)."
+    start_background /usr/local/bin/anyssh-client /var/log/anyssh-client.log /run/anyssh-client.pid
   fi
 else
   INSTALL_DIR="$HOME/.local/share/anyssh"
-  install -d -m 0700 "$INSTALL_DIR"
+  mkdir -p "$INSTALL_DIR"
+  chmod 0700 "$INSTALL_DIR"
   stop_pid_file "$INSTALL_DIR/client.pid" "$INSTALL_DIR/anyssh-client"
-  install -m 0755 "$TMP_FILE" "$INSTALL_DIR/anyssh-client"
-  nohup "$INSTALL_DIR/anyssh-client" >> "$INSTALL_DIR/client.log" 2>&1 < /dev/null &
-  echo $! > "$INSTALL_DIR/client.pid"
-  echo "AnySSH client installed or updated and restarted in the background (PID $!)."
+  cp "$TMP_FILE" "$INSTALL_DIR/anyssh-client"
+  chmod 0755 "$INSTALL_DIR/anyssh-client"
+  start_background "$INSTALL_DIR/anyssh-client" "$INSTALL_DIR/client.log" "$INSTALL_DIR/client.pid"
 fi
 `, shellQuote(serverURL), checksumCases.String())
 }

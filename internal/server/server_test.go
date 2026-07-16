@@ -155,7 +155,10 @@ func TestInstallScript(t *testing.T) {
 	}
 	script := renderInstallScript("https://ssh.example.com", checksums)
 	for _, want := range []string{
+		"#!/bin/sh",
 		"SERVER_URL='https://ssh.example.com'",
+		"wget -qO",
+		"openssl dgst -sha256",
 		"download/anyssh-client/$ACTUAL_ARCH",
 		"armv5*|armv6*|armv7*",
 		"command -v arch",
@@ -178,7 +181,7 @@ func TestInstallScript(t *testing.T) {
 		}
 	}
 	stopIndex := strings.Index(script, "systemctl stop anyssh-client.service")
-	installIndex := strings.Index(script, `install -m 0755 "$TMP_FILE" /usr/local/bin/anyssh-client`)
+	installIndex := strings.Index(script, `cp "$TMP_FILE" /usr/local/bin/anyssh-client`)
 	restartIndex := strings.Index(script, "systemctl restart anyssh-client.service")
 	if stopIndex < 0 || installIndex <= stopIndex || restartIndex <= installIndex {
 		t.Fatal("systemd update must stop, replace, then restart")
@@ -193,10 +196,12 @@ func TestInstallScript(t *testing.T) {
 			t.Fatalf("installer unexpectedly contains %q", unwanted)
 		}
 	}
-	cmd := exec.Command("bash", "-n")
-	cmd.Stdin = strings.NewReader(script)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("invalid installer shell syntax: %v\n%s", err, output)
+	for _, shell := range []string{"/bin/sh", "/usr/bin/dash"} {
+		cmd := exec.Command(shell, "-n")
+		cmd.Stdin = strings.NewReader(script)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("invalid installer syntax for %s: %v\n%s", shell, err, output)
+		}
 	}
 }
 
@@ -208,7 +213,7 @@ func TestArchitectureDetectionWithoutUname(t *testing.T) {
 	}
 	script := renderInstallScript("https://ssh.example.com", checksums)
 	start := strings.Index(script, "normalize_arch() {")
-	end := strings.Index(script, "TMP_FILE=")
+	end := strings.Index(script, "if command -v mktemp")
 	if start < 0 || end <= start {
 		t.Fatal("cannot locate architecture detector in installer")
 	}
@@ -217,7 +222,7 @@ func TestArchitectureDetectionWithoutUname(t *testing.T) {
 	t.Run("dpkg", func(t *testing.T) {
 		binDir := t.TempDir()
 		writeExecutable(t, filepath.Join(binDir, "dpkg"), "#!/bin/sh\necho riscv64\n")
-		cmd := exec.Command("/bin/bash", "-c", detector)
+		cmd := exec.Command("/bin/sh", "-c", detector)
 		cmd.Env = []string{"PATH=" + binDir}
 		output, err := cmd.CombinedOutput()
 		if err != nil || strings.TrimSpace(string(output)) != "riscv64" {
@@ -233,7 +238,7 @@ case "$*" in
   *-j18*) echo "62 0" ;;
 esac
 `)
-		cmd := exec.Command("/bin/bash", "-c", detector)
+		cmd := exec.Command("/bin/sh", "-c", detector)
 		cmd.Env = []string{"PATH=" + binDir}
 		output, err := cmd.CombinedOutput()
 		if err != nil || strings.TrimSpace(string(output)) != "amd64" {

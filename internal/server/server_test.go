@@ -20,9 +20,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func testConfig(cfg Config) Config {
+	if cfg.SharedSecret == "" {
+		cfg.SharedSecret = "test-secret"
+	}
+	return cfg
+}
+
 func TestRegistrationPageAndSessionProxy(t *testing.T) {
 	t.Parallel()
-	srv, err := New(Config{})
+	srv, err := New(testConfig(Config{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +274,7 @@ func writeExecutable(t *testing.T, path, content string) {
 
 func TestInstallServerURL(t *testing.T) {
 	t.Parallel()
-	srv, err := New(Config{PublicURL: "https://configured.example.com/"})
+	srv, err := New(testConfig(Config{PublicURL: "https://configured.example.com/"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +283,7 @@ func TestInstallServerURL(t *testing.T) {
 		t.Fatalf("configured public URL: %q", got)
 	}
 
-	srv, err = New(Config{})
+	srv, err = New(testConfig(Config{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +320,7 @@ func TestConfiguredClientIsExecutable(t *testing.T) {
 	if runtime.GOOS != "linux" || !validClientArchitecture(runtime.GOARCH) {
 		t.Skip("ELF trailer execution test requires a supported Linux client")
 	}
-	srv, err := New(Config{PublicURL: "http://127.0.0.1:1", ClientRotate: 10 * time.Minute})
+	srv, err := New(testConfig(Config{PublicURL: "http://127.0.0.1:1", ClientRotate: 10 * time.Minute}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +342,7 @@ func TestConfiguredClientIsExecutable(t *testing.T) {
 }
 
 func TestAdminClientControls(t *testing.T) {
-	srv, err := New(Config{PublicURL: "http://ssh.example.com"})
+	srv, err := New(testConfig(Config{PublicURL: "http://ssh.example.com"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +412,7 @@ func TestWeComWebhookPayload(t *testing.T) {
 		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
 	}))
 	defer endpoint.Close()
-	srv, err := New(Config{})
+	srv, err := New(testConfig(Config{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,46 +430,16 @@ func TestWeComWebhookPayload(t *testing.T) {
 	}
 }
 
-func TestSettingsPersistence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	srv, err := New(Config{DataFile: path})
+func TestSecretIsRequiredAndPermanentRotationAllowed(t *testing.T) {
+	if _, err := New(Config{}); err == nil {
+		t.Fatal("expected missing secret to be rejected")
+	}
+	srv, err := New(Config{SharedSecret: "secret", ClientRotate: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := New(Config{DataFile: path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reloaded.secret != srv.secret || reloaded.secret == "" {
-		t.Fatalf("generated client secret was not persisted")
-	}
-	if reloaded.clientRotate != 0 {
-		t.Fatalf("permanent rotation was not persisted: %s", reloaded.clientRotate)
-	}
-}
-
-func TestExplicitSecretOverridesPersistedSecret(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	first, err := New(Config{DataFile: path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.secret == "" {
-		t.Fatal("automatic secret was not generated")
-	}
-	overridden, err := New(Config{DataFile: path, SharedSecret: "replacement-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if overridden.secret != "replacement-secret" {
-		t.Fatal("explicit secret did not override state")
-	}
-	reloaded, err := New(Config{DataFile: path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reloaded.secret != "replacement-secret" {
-		t.Fatalf("override was not persisted: %q", reloaded.secret)
+	if srv.clientRotate != 0 {
+		t.Fatalf("rotation=%s, want permanent", srv.clientRotate)
 	}
 }
 

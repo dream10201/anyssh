@@ -29,7 +29,7 @@ bin/anyssh-server
 在具有公网 IP 的服务器上启动：
 
 ```bash
-./bin/anyssh-server \
+ANYSSH_SECRET='替换成一个足够长的随机密钥' ./bin/anyssh-server \
   -listen :8080 \
   -public-url http://1.2.3.4:8080 \
   -client-rotate 30m
@@ -37,7 +37,7 @@ bin/anyssh-server
 
 - `-public-url` 是安装后的客户端连接地址，也是通知消息中链接的地址。
 - `-client-rotate` 控制链接刷新周期，设置为 `0` 表示永久不自动刷新。
-- 客户端注册密钥由服务端首次启动时自动生成并保存在状态文件中。删除状态文件会使已有客户端下次重连失败。
+- `ANYSSH_SECRET` 是必填的客户端注册密钥。修改后，携带旧密钥的客户端无法再次连接。
 
 ## 容器运行
 
@@ -48,10 +48,9 @@ docker run -d \
   --name anyssh \
   --restart unless-stopped \
   -p 8080:8080 \
-  -v anyssh-data:/data \
   -e ANYSSH_PUBLIC_URL=http://1.2.3.4:8080 \
   -e ANYSSH_CLIENT_ROTATE=30m \
-  -e ANYSSH_SECRET='可选的客户端注册密钥' \
+  -e ANYSSH_SECRET='必填的客户端注册密钥' \
   -e ANYSSH_WECOM_KEY='企业微信群机器人 key' \
   ghcr.io/dream10201/anyssh:latest
 ```
@@ -62,10 +61,9 @@ docker run -d \
 | --- | --- | --- | --- |
 | `ANYSSH_LISTEN` | 否 | `:8080` | 容器监听地址 |
 | `ANYSSH_PUBLIC_URL` | 否 | 按请求推导 | 客户端及浏览器访问的公网地址 |
-| `ANYSSH_CLIENT_ROTATE` | 否 | `1h` | 随机链接轮换周期 |
-| `ANYSSH_SECRET` | 否 | 自动生成 | 客户端注册密钥；修改后旧密钥客户端无法重连 |
+| `ANYSSH_CLIENT_ROTATE` | 否 | `30m` | 随机链接轮换周期；`0` 表示永久 |
+| `ANYSSH_SECRET` | 是 | 无 | 客户端注册密钥；修改后旧密钥客户端无法重连 |
 | `ANYSSH_WECOM_KEY` | 否 | 空 | 企业微信群机器人 Webhook 中的 `key` 参数 |
-| `ANYSSH_DATA_FILE` | 否 | 容器内 `/data/state.json` | 管理设置状态文件 |
 
 GitHub Action 会发布 `linux/amd64`、`linux/arm64` 多平台镜像到 GHCR。每个镜像中的服务端都携带上述 13 种 Linux 客户端。
 新的容器构建触发时会自动取消之前仍在运行的容器构建，避免多个 Action 并行消耗资源。
@@ -103,7 +101,7 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 
 ## 管理后台与企业微信
 
-打开 `http://服务端地址/admin/` 可以查看当前连接客户端、设备信息及各自链接，并执行禁用、设置链接过期时间和立即更换链接。页面顶部可修改全局链接刷新分钟数，`0` 表示永久不自动刷新；设置会立即下发给在线客户端并持久化。每个客户端都会生成独立链接。
+打开 `http://服务端地址/admin/` 可以查看当前连接客户端、设备信息及各自链接，并执行禁用、设置链接过期时间和立即更换链接。页面顶部可修改全局链接刷新分钟数，`0` 表示永久不自动刷新；设置会立即下发给在线客户端，但服务端重启后恢复环境变量值。每个客户端都会生成独立链接。
 
 设置 `ANYSSH_WECOM_KEY` 后，新链接会通过企业微信群机器人通知，内容包含主机名、系统用户、系统架构、匿名设备 ID 和访问链接。服务端使用固定官方地址 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=KEY`。
 
@@ -114,7 +112,7 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 推荐使用 Caddy 或 Nginx 终止 TLS，并确保反向代理支持 WebSocket。服务端应明确设置公网 HTTPS 地址：
 
 ```bash
-./bin/anyssh-server \
+ANYSSH_SECRET='替换成一个足够长的随机密钥' ./bin/anyssh-server \
   -listen :8080 \
   -public-url https://ssh.example.com \
   -client-rotate 30m

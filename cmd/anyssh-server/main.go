@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	rotateDefault, err := durationEnv("ANYSSH_CLIENT_ROTATE", time.Hour)
+	rotateDefault, err := durationEnv("ANYSSH_CLIENT_ROTATE", 30*time.Minute)
 	if err != nil {
 		slog.Error("invalid environment", "name", "ANYSSH_CLIENT_ROTATE", "error", err)
 		os.Exit(2)
@@ -22,7 +22,6 @@ func main() {
 	secret := envOr("ANYSSH_SECRET", "")
 	publicURL := flag.String("public-url", envOr("ANYSSH_PUBLIC_URL", ""), "public server URL used by the one-line installer")
 	clientRotate := flag.Duration("client-rotate", rotateDefault, "access link rotation interval installed clients will use")
-	dataFile := flag.String("data-file", envOr("ANYSSH_DATA_FILE", "anyssh-state.json"), "persistent admin settings file")
 	weComKey := envOr("ANYSSH_WECOM_KEY", "")
 	flag.Parse()
 
@@ -31,7 +30,6 @@ func main() {
 		WeComKey:     weComKey,
 		PublicURL:    *publicURL,
 		ClientRotate: *clientRotate,
-		DataFile:     *dataFile,
 	})
 	if err != nil {
 		slog.Error("initialize server", "error", err)

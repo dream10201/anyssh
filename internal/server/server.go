@@ -28,7 +28,6 @@ type Config struct {
 	WeComKey     string
 	PublicURL    string
 	ClientRotate time.Duration
-	DataFile     string
 	Logger       *slog.Logger
 }
 
@@ -38,7 +37,6 @@ type Server struct {
 	clientRotate  time.Duration
 	weComKey      string
 	weComEndpoint string
-	dataFile      string
 	logger        *slog.Logger
 	upgrader      websocket.Upgrader
 
@@ -79,8 +77,11 @@ func New(cfg Config) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if strings.TrimSpace(cfg.SharedSecret) == "" {
+		return nil, errors.New("ANYSSH_SECRET is required")
+	}
 	if cfg.ClientRotate < 0 {
-		cfg.ClientRotate = time.Hour
+		return nil, errors.New("client rotation interval cannot be negative")
 	}
 	assets, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -96,26 +97,9 @@ func New(cfg Config) (*Server, error) {
 		weComEndpoint: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send",
 		publicURL:     strings.TrimRight(cfg.PublicURL, "/"),
 		clientRotate:  cfg.ClientRotate,
-		dataFile:      cfg.DataFile,
 		logger:        logger,
 		clients:       make(map[string]*clientConn),
 		pending:       make(map[string]*pendingSession),
-	}
-	if err := s.loadSettings(); err != nil {
-		return nil, err
-	}
-	if s.secret == "" {
-		s.secret, err = randomHex(32)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.saveSettings(); err != nil {
-			return nil, err
-		}
-	} else if cfg.SharedSecret != "" {
-		if err := s.saveSettings(); err != nil {
-			return nil, err
-		}
 	}
 	if s.publicURL != "" {
 		u, err := url.Parse(s.publicURL)

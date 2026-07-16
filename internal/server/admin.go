@@ -105,10 +105,6 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			clients = append(clients, c)
 		}
 		s.mu.Unlock()
-		if err := s.saveSettings(); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
 		for _, c := range clients {
 			_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds})
 		}

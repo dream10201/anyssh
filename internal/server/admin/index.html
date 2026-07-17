@@ -38,33 +38,6 @@
         </div>
       </div>
 
-      <section class="panel rotation-panel" aria-labelledby="rotationTitle">
-        <div class="panel-heading">
-          <div>
-            <div class="title-line">
-              <h2 id="rotationTitle">链接自动轮换</h2>
-              <button
-                class="info-button"
-                type="button"
-                aria-label="查看链接轮换说明"
-                title="按设定周期为所有在线客户端生成新链接，旧链接随即失效。"
-              >?</button>
-            </div>
-            <p>定期更换客户端访问链接，降低旧链接长期泄露的风险。</p>
-          </div>
-          <span class="setting-state" id="rotationState">读取中</span>
-        </div>
-        <div class="rotation-form">
-          <label for="rotation">轮换周期</label>
-          <div class="field-with-unit">
-            <input id="rotation" type="number" min="0" step="1" inputmode="numeric" />
-            <span>分钟</span>
-          </div>
-          <button class="button primary" id="saveRotation" type="button">保存设置</button>
-          <span class="field-hint">设为 0 时不自动轮换</span>
-        </div>
-      </section>
-
       <details class="panel install-panel">
         <summary>
           <span>
@@ -106,12 +79,13 @@
                 <th>设备</th>
                 <th>运行环境</th>
                 <th>访问状态</th>
+                <th>链接轮换</th>
                 <th>访问有效期</th>
                 <th class="actions-heading">操作</th>
               </tr>
             </thead>
             <tbody id="clients">
-              <tr class="loading-row"><td colspan="5">正在读取客户端…</td></tr>
+              <tr class="loading-row"><td colspan="6">正在读取客户端…</td></tr>
             </tbody>
           </table>
         </div>

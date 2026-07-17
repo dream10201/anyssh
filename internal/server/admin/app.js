@@ -80,6 +80,7 @@ const clientState = (client) => {
 const clientRow = (client) => {
   const state = clientState(client);
   const expiry = toLocalInputValue(client.expires_at);
+  const rotationMinutes = client.rotate_seconds / 60;
   const expiryNote = client.expires_at ? "到点后当前会话将断开" : "留空表示长期有效";
   return `
     <tr>
@@ -89,6 +90,16 @@ const clientRow = (client) => {
       </td>
       <td data-label="运行环境"><span class="runtime">${esc(client.os)}/${esc(client.arch)}</span></td>
       <td data-label="访问状态"><span class="status ${state.className}">${state.label}</span></td>
+      <td data-label="链接轮换">
+        <div class="rotation-control">
+          <div class="compact-number">
+            <input type="number" min="0" step="1" inputmode="numeric" value="${esc(rotationMinutes)}" data-rotation="${esc(client.id)}" aria-label="${esc(client.hostname)} 的链接轮换周期" />
+            <span>分钟</span>
+          </div>
+          <button class="button subtle" type="button" data-set-rotation="${esc(client.id)}">应用</button>
+        </div>
+        <span class="expiry-note">${rotationMinutes === 0 ? "不自动轮换" : `每 ${esc(rotationMinutes)} 分钟更换`}</span>
+      </td>
       <td data-label="访问有效期">
         <div class="expiry-control">
           <input class="expiry-input" type="datetime-local" value="${esc(expiry)}" data-expire="${esc(client.id)}" aria-label="${esc(client.hostname)} 的访问截止时间" />
@@ -110,7 +121,7 @@ const clientRow = (client) => {
 let loadingClients = false;
 async function loadClients({ force = false } = {}) {
   if (loadingClients) return;
-  if (!force && document.activeElement?.matches(".expiry-input")) return;
+  if (!force && document.activeElement?.matches(".expiry-input, [data-rotation]")) return;
   loadingClients = true;
   const refreshButton = $("#refreshClients");
   refreshButton.disabled = true;
@@ -118,7 +129,7 @@ async function loadClients({ force = false } = {}) {
     const rows = await api("/api/admin/clients");
     $("#clients").innerHTML = rows.length
       ? rows.map(clientRow).join("")
-      : '<tr><td class="empty-state" colspan="5">暂无已连接客户端</td></tr>';
+      : '<tr><td class="empty-state" colspan="6">暂无已连接客户端</td></tr>';
     const states = rows.map(clientState);
     $("#onlineCount").textContent = states.filter((state) => state.className === "online").length;
     $("#restrictedCount").textContent = states.filter((state) => state.className !== "online").length;
@@ -178,6 +189,22 @@ document.addEventListener("click", async (event) => {
       showMessage(disabling ? "客户端访问已禁用" : "客户端访问已启用");
     }
 
+    if (button.dataset.setRotation) {
+      const id = button.dataset.setRotation;
+      const input = document.querySelector(`[data-rotation="${CSS.escape(id)}"]`);
+      const minutes = Number(input.value);
+      if (!Number.isFinite(minutes) || minutes < 0) {
+        showMessage("请输入不小于 0 的分钟数", "error");
+        return;
+      }
+      setButtonBusy(button, true);
+      await api(`/api/admin/clients/${encodeURIComponent(id)}/rotation`, {
+        method: "POST",
+        body: JSON.stringify({ rotate_seconds: Math.round(minutes * 60) }),
+      });
+      showMessage(minutes === 0 ? "该客户端已关闭自动轮换" : "该客户端的轮换周期已更新");
+    }
+
     if (button.dataset.exp || button.dataset.clearExp) {
       const id = button.dataset.exp || button.dataset.clearExp;
       const input = document.querySelector(`[data-expire="${CSS.escape(id)}"]`);
@@ -206,34 +233,9 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-$("#saveRotation").addEventListener("click", async () => {
-  const button = $("#saveRotation");
-  const minutes = Number($("#rotation").value);
-  if (!Number.isFinite(minutes) || minutes < 0) {
-    showMessage("请输入不小于 0 的分钟数", "error");
-    return;
-  }
-  try {
-    setButtonBusy(button, true);
-    await api("/api/admin/settings", {
-      method: "PUT",
-      body: JSON.stringify({ rotate_seconds: Math.round(minutes * 60) }),
-    });
-    $("#rotationState").textContent = minutes === 0 ? "不自动轮换" : `每 ${minutes} 分钟`;
-    showMessage(minutes === 0 ? "已关闭自动轮换" : "链接轮换周期已更新");
-  } catch (error) {
-    showMessage(error.message, "error");
-  } finally {
-    setButtonBusy(button, false);
-  }
-});
-
 (async () => {
   try {
     const settings = await api("/api/admin/settings");
-    const minutes = settings.rotate_seconds / 60;
-    $("#rotation").value = minutes;
-    $("#rotationState").textContent = minutes === 0 ? "不自动轮换" : `每 ${minutes} 分钟`;
     showInstallCommands(settings);
     await loadClients();
   } catch (error) {

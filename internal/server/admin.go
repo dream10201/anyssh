@@ -15,15 +15,16 @@ import (
 )
 
 type adminClient struct {
-	ID           string     `json:"id"`
-	Hostname     string     `json:"hostname"`
-	Username     string     `json:"username"`
-	OS           string     `json:"os"`
-	Arch         string     `json:"arch"`
-	Link         string     `json:"link"`
-	RegisteredAt time.Time  `json:"registered_at"`
-	Disabled     bool       `json:"disabled"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	ID            string     `json:"id"`
+	Hostname      string     `json:"hostname"`
+	Username      string     `json:"username"`
+	OS            string     `json:"os"`
+	Arch          string     `json:"arch"`
+	Link          string     `json:"link"`
+	RegisteredAt  time.Time  `json:"registered_at"`
+	Disabled      bool       `json:"disabled"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	RotateSeconds int64      `json:"rotate_seconds"`
 }
 
 func cleanHeader(value, fallback string) string {
@@ -72,7 +73,7 @@ func (s *Server) handleAdminClients(w http.ResponseWriter, r *http.Request) {
 	result := make([]adminClient, 0, len(clients))
 	for _, c := range clients {
 		c.mu.Lock()
-		item := adminClient{ID: c.deviceID, Hostname: c.hostname, Username: c.username, OS: c.osName, Arch: c.arch, Link: c.link, RegisteredAt: c.registeredAt, Disabled: c.disabled}
+		item := adminClient{ID: c.deviceID, Hostname: c.hostname, Username: c.username, OS: c.osName, Arch: c.arch, Link: c.link, RegisteredAt: c.registeredAt, Disabled: c.disabled, RotateSeconds: c.rotateSeconds}
 		if !c.expiresAt.IsZero() {
 			x := c.expiresAt
 			item.ExpiresAt = &x
@@ -86,38 +87,10 @@ func (s *Server) handleAdminClients(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.mu.Lock()
-		seconds := int64(s.clientRotate / time.Second)
-		s.mu.Unlock()
 		writeJSON(w, map[string]any{
-			"rotate_seconds": seconds,
-			"public_url":     s.publicURL,
-			"direct_url":     requestServerURL(r),
+			"public_url": s.publicURL,
+			"direct_url": requestServerURL(r),
 		})
-	case http.MethodPut:
-		var body struct {
-			RotateSeconds int64 `json:"rotate_seconds"`
-		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || body.RotateSeconds < 0 {
-			http.Error(w, "invalid rotation interval", 400)
-			return
-		}
-		s.mu.Lock()
-		s.clientRotate = time.Duration(body.RotateSeconds) * time.Second
-		version := time.Now().UnixNano()
-		if version <= s.rotationVersion {
-			version = s.rotationVersion + 1
-		}
-		s.rotationVersion = version
-		clients := make([]*clientConn, 0, len(s.clients))
-		for _, c := range s.clients {
-			clients = append(clients, c)
-		}
-		s.mu.Unlock()
-		for _, c := range clients {
-			_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds, RotateVersion: version})
-		}
-		writeJSON(w, map[string]bool{"ok": true})
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
@@ -139,6 +112,29 @@ func (s *Server) handleAdminClientAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	switch parts[1] {
+	case "rotation":
+		var body struct {
+			RotateSeconds int64 `json:"rotate_seconds"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.RotateSeconds < 0 {
+			http.Error(w, "invalid rotation interval", 400)
+			return
+		}
+		c.mu.Lock()
+		version := time.Now().UnixNano()
+		if version <= c.rotateVersion {
+			version = c.rotateVersion + 1
+		}
+		c.rotateSeconds = body.RotateSeconds
+		c.rotateVersion = version
+		c.mu.Unlock()
+		s.mu.Lock()
+		s.rotations[c.deviceID] = rotationSetting{seconds: body.RotateSeconds, version: version}
+		s.mu.Unlock()
+		if err := c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds, RotateVersion: version}); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
 	case "disable":
 		var body struct {
 			Disabled bool `json:"disabled"`

@@ -377,7 +377,7 @@ func TestAdminClientControls(t *testing.T) {
 	if control.ReadJSON(&initial) != nil || initial.Type != "set_rotate" {
 		t.Fatalf("initial rotation message: %+v", initial)
 	}
-	putAdminJSON(t, http.MethodPut, httpServer.URL+"/api/admin/settings", `{"rotate_seconds":120}`, srv.adminSecret)
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/rotation", `{"rotate_seconds":120}`, srv.adminSecret)
 	var update protocol.ControlMessage
 	if control.ReadJSON(&update) != nil || update.Type != "set_rotate" || update.RotateSeconds != 120 || update.RotateVersion <= 0 {
 		t.Fatalf("rotation update: %+v", update)
@@ -391,7 +391,7 @@ func TestAdminClientControls(t *testing.T) {
 		t.Fatal("decode clients")
 	}
 	_ = resp.Body.Close()
-	if len(clients) != 1 || clients[0].Hostname != "server-a" || clients[0].Arch != "arm64" {
+	if len(clients) != 1 || clients[0].Hostname != "server-a" || clients[0].Arch != "arm64" || clients[0].RotateSeconds != 120 {
 		t.Fatalf("clients: %+v", clients)
 	}
 	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":true}`, srv.adminSecret)
@@ -451,7 +451,7 @@ func TestSecretIsRequiredAndPermanentRotationAllowed(t *testing.T) {
 	}
 }
 
-func TestRotationIsRecoveredFromReconnectingClient(t *testing.T) {
+func TestClientRotationIsRecoveredFromReconnectingClient(t *testing.T) {
 	srv, err := New(Config{SharedSecret: "secret", ClientRotate: 30 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -472,21 +472,96 @@ func TestRotationIsRecoveredFromReconnectingClient(t *testing.T) {
 	if message.RotateSeconds != 0 || message.RotateVersion != 12345 {
 		t.Fatalf("recovered message: %+v", message)
 	}
-	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/settings", "", srv.adminSecret)
+	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/clients", "", srv.adminSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var settingsBody struct {
-		RotateSeconds int64  `json:"rotate_seconds"`
-		PublicURL     string `json:"public_url"`
-		DirectURL     string `json:"direct_url"`
+	var clients []adminClient
+	if json.NewDecoder(resp.Body).Decode(&clients) != nil {
+		t.Fatal("decode clients")
 	}
-	if json.NewDecoder(resp.Body).Decode(&settingsBody) != nil {
-		t.Fatal("decode settings")
+	if len(clients) != 1 || clients[0].RotateSeconds != 0 {
+		t.Fatalf("clients: %+v", clients)
 	}
-	if settingsBody.RotateSeconds != 0 || settingsBody.PublicURL != "" || settingsBody.DirectURL != httpServer.URL {
-		t.Fatalf("settings: %+v", settingsBody)
+}
+
+func TestClientRotationUpdateIsNotBroadcast(t *testing.T) {
+	srv, err := New(Config{SharedSecret: "secret", AdminSecret: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/register?token="
+	connect := func(tokenByte, deviceID string) *websocket.Conn {
+		header := http.Header{
+			"X-AnySSH-Secret":         []string{"secret"},
+			"X-AnySSH-Device-ID":      []string{deviceID},
+			"X-AnySSH-Rotate-Seconds": []string{"60"},
+			"X-AnySSH-Rotate-Version": []string{"1"},
+		}
+		conn, _, dialErr := websocket.DefaultDialer.Dial(wsURL+strings.Repeat(tokenByte, 64), header)
+		if dialErr != nil {
+			t.Fatal(dialErr)
+		}
+		var initial protocol.ControlMessage
+		if conn.ReadJSON(&initial) != nil || initial.RotateSeconds != 60 {
+			t.Fatalf("initial rotation for %s: %+v", deviceID, initial)
+		}
+		return conn
+	}
+	first := connect("e", "device-1")
+	defer first.Close()
+	second := connect("f", "device-2")
+	defer second.Close()
+
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/rotation", `{"rotate_seconds":300}`, srv.adminSecret)
+	var update protocol.ControlMessage
+	if first.ReadJSON(&update) != nil || update.Type != "set_rotate" || update.RotateSeconds != 300 || update.RotateVersion <= 1 {
+		t.Fatalf("target rotation update: %+v", update)
+	}
+	_ = second.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if err := second.ReadJSON(&update); err == nil {
+		t.Fatalf("rotation update was broadcast to device-2: %+v", update)
+	}
+}
+
+func TestClientRotationSurvivesClientReconnect(t *testing.T) {
+	srv, err := New(Config{SharedSecret: "secret", AdminSecret: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/register?token="
+	header := http.Header{
+		"X-AnySSH-Secret":         []string{"secret"},
+		"X-AnySSH-Device-ID":      []string{"device-1"},
+		"X-AnySSH-Rotate-Seconds": []string{"60"},
+		"X-AnySSH-Rotate-Version": []string{"0"},
+	}
+	first, _, err := websocket.DefaultDialer.Dial(wsURL+strings.Repeat("a", 64), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message protocol.ControlMessage
+	if first.ReadJSON(&message) != nil || message.RotateSeconds != 60 {
+		t.Fatalf("initial rotation: %+v", message)
+	}
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/rotation", `{"rotate_seconds":300}`, srv.adminSecret)
+	if first.ReadJSON(&message) != nil || message.RotateSeconds != 300 {
+		t.Fatalf("rotation update: %+v", message)
+	}
+	_ = first.Close()
+
+	second, _, err := websocket.DefaultDialer.Dial(wsURL+strings.Repeat("b", 64), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if second.ReadJSON(&message) != nil || message.RotateSeconds != 300 {
+		t.Fatalf("rotation after reconnect: %+v", message)
 	}
 }
 

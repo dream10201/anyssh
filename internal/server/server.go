@@ -34,35 +34,37 @@ type Config struct {
 }
 
 type Server struct {
-	secret          string
-	adminSecret     string
-	publicURL       string
-	clientRotate    time.Duration
-	rotationVersion int64
-	weComKey        string
-	weComEndpoint   string
-	logger          *slog.Logger
-	upgrader        websocket.Upgrader
+	secret        string
+	adminSecret   string
+	publicURL     string
+	clientRotate  time.Duration
+	weComKey      string
+	weComEndpoint string
+	logger        *slog.Logger
+	upgrader      websocket.Upgrader
 
-	mu      sync.Mutex
-	clients map[string]*clientConn
-	pending map[string]*pendingSession
-	web     http.Handler
-	admin   http.Handler
+	mu        sync.Mutex
+	clients   map[string]*clientConn
+	rotations map[string]rotationSetting
+	pending   map[string]*pendingSession
+	web       http.Handler
+	admin     http.Handler
 }
 
 type clientConn struct {
-	token        string
-	deviceID     string
-	hostname     string
-	username     string
-	osName       string
-	arch         string
-	link         string
-	registeredAt time.Time
-	disabled     bool
-	expiresAt    time.Time
-	ws           *websocket.Conn
+	token         string
+	deviceID      string
+	hostname      string
+	username      string
+	osName        string
+	arch          string
+	link          string
+	registeredAt  time.Time
+	disabled      bool
+	expiresAt     time.Time
+	rotateSeconds int64
+	rotateVersion int64
+	ws            *websocket.Conn
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
@@ -74,6 +76,11 @@ type pendingSession struct {
 	client *clientConn
 	key    string
 	ready  chan *websocket.Conn
+}
+
+type rotationSetting struct {
+	seconds int64
+	version int64
 }
 
 func New(cfg Config) (*Server, error) {
@@ -104,6 +111,7 @@ func New(cfg Config) (*Server, error) {
 		clientRotate:  cfg.ClientRotate,
 		logger:        logger,
 		clients:       make(map[string]*clientConn),
+		rotations:     make(map[string]rotationSetting),
 		pending:       make(map[string]*pendingSession),
 	}
 	if strings.TrimSpace(s.adminSecret) == "" {
@@ -182,27 +190,28 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	reportedSeconds, secondsErr := strconv.ParseInt(r.Header.Get("X-AnySSH-Rotate-Seconds"), 10, 64)
 	reportedVersion, versionErr := strconv.ParseInt(r.Header.Get("X-AnySSH-Rotate-Version"), 10, 64)
+	if secondsErr != nil || reportedSeconds < 0 {
+		reportedSeconds = int64(s.clientRotate / time.Second)
+	}
+	if versionErr != nil || reportedVersion < 0 {
+		reportedVersion = 0
+	}
 	s.mu.Lock()
+	rotation, exists := s.rotations[c.deviceID]
+	if !exists || reportedVersion > rotation.version {
+		rotation = rotationSetting{seconds: reportedSeconds, version: reportedVersion}
+		s.rotations[c.deviceID] = rotation
+	}
+	c.rotateSeconds = rotation.seconds
+	c.rotateVersion = rotation.version
 	old := s.clients[token]
 	s.clients[token] = c
-	if secondsErr == nil && versionErr == nil && reportedSeconds >= 0 && reportedVersion > s.rotationVersion {
-		s.clientRotate = time.Duration(reportedSeconds) * time.Second
-		s.rotationVersion = reportedVersion
-	}
-	rotateSeconds := int64(s.clientRotate / time.Second)
-	rotateVersion := s.rotationVersion
-	clients := make([]*clientConn, 0, len(s.clients))
-	for _, current := range s.clients {
-		clients = append(clients, current)
-	}
 	s.mu.Unlock()
 	if old != nil {
 		old.close()
 	}
 	s.logger.Info("client registered", "token_prefix", token[:8])
-	for _, current := range clients {
-		_ = current.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: rotateSeconds, RotateVersion: rotateVersion})
-	}
+	_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: c.rotateSeconds, RotateVersion: c.rotateVersion})
 	go s.notifyClientLink(c)
 
 	ws.SetReadLimit(4096)

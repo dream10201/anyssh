@@ -342,13 +342,21 @@ func TestConfiguredClientIsExecutable(t *testing.T) {
 }
 
 func TestAdminClientControls(t *testing.T) {
-	srv, err := New(testConfig(Config{PublicURL: "http://ssh.example.com"}))
+	srv, err := New(testConfig(Config{PublicURL: "http://ssh.example.com", AdminSecret: "admin-secret"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(srv.Handler())
 	defer httpServer.Close()
-	page, err := http.Get(httpServer.URL + "/admin/")
+	unauthorized, err := http.Get(httpServer.URL + "/admin/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("admin without secret: %d", unauthorized.StatusCode)
+	}
+	page, err := adminRequest(http.MethodGet, httpServer.URL+"/admin/", "", srv.adminSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,12 +377,12 @@ func TestAdminClientControls(t *testing.T) {
 	if control.ReadJSON(&initial) != nil || initial.Type != "set_rotate" {
 		t.Fatalf("initial rotation message: %+v", initial)
 	}
-	putJSON(t, httpServer.URL+"/api/admin/settings", `{"rotate_seconds":120}`)
+	putAdminJSON(t, http.MethodPut, httpServer.URL+"/api/admin/settings", `{"rotate_seconds":120}`, srv.adminSecret)
 	var update protocol.ControlMessage
 	if control.ReadJSON(&update) != nil || update.Type != "set_rotate" || update.RotateSeconds != 120 || update.RotateVersion <= 0 {
 		t.Fatalf("rotation update: %+v", update)
 	}
-	resp, err := http.Get(httpServer.URL + "/api/admin/clients")
+	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/clients", "", srv.adminSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +394,7 @@ func TestAdminClientControls(t *testing.T) {
 	if len(clients) != 1 || clients[0].Hostname != "server-a" || clients[0].Arch != "arm64" {
 		t.Fatalf("clients: %+v", clients)
 	}
-	postJSON(t, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":true}`)
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":true}`, srv.adminSecret)
 	linkResp, err := http.Get(httpServer.URL + "/s/" + token + "/")
 	if err != nil {
 		t.Fatal(err)
@@ -395,8 +403,8 @@ func TestAdminClientControls(t *testing.T) {
 	if linkResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("disabled link status %d", linkResp.StatusCode)
 	}
-	postJSON(t, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":false}`)
-	postJSON(t, httpServer.URL+"/api/admin/clients/device-1/rotate", `{}`)
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/disable", `{"disabled":false}`, srv.adminSecret)
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/rotate", `{}`, srv.adminSecret)
 	var message protocol.ControlMessage
 	if control.ReadJSON(&message) != nil || message.Type != "rotate" {
 		t.Fatalf("rotate message: %+v", message)
@@ -464,7 +472,7 @@ func TestRotationIsRecoveredFromReconnectingClient(t *testing.T) {
 	if message.RotateSeconds != 0 || message.RotateVersion != 12345 {
 		t.Fatalf("recovered message: %+v", message)
 	}
-	resp, err := http.Get(httpServer.URL + "/api/admin/settings")
+	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/settings", "", srv.adminSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,33 +486,25 @@ func TestRotationIsRecoveredFromReconnectingClient(t *testing.T) {
 	}
 }
 
-func postJSON(t *testing.T, url, body string) {
+func putAdminJSON(t *testing.T, method, url, body, secret string) {
 	t.Helper()
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	resp, err := adminRequest(method, url, body, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("POST %s: %d %s", url, resp.StatusCode, data)
+		t.Fatalf("%s %s: %d %s", method, url, resp.StatusCode, data)
 	}
 }
 
-func putJSON(t *testing.T, url, body string) {
-	t.Helper()
-	req, err := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+func adminRequest(method, url, body, secret string) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("PUT %s: %d %s", url, resp.StatusCode, data)
-	}
+	req.Header.Set("X-AnySSH-Admin-Secret", secret)
+	return http.DefaultClient.Do(req)
 }

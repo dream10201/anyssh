@@ -26,6 +26,7 @@ var webFiles embed.FS
 
 type Config struct {
 	SharedSecret string
+	AdminSecret  string
 	WeComKey     string
 	PublicURL    string
 	ClientRotate time.Duration
@@ -34,6 +35,7 @@ type Config struct {
 
 type Server struct {
 	secret          string
+	adminSecret     string
 	publicURL       string
 	clientRotate    time.Duration
 	rotationVersion int64
@@ -95,6 +97,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{
 		secret:        cfg.SharedSecret,
+		adminSecret:   cfg.AdminSecret,
 		weComKey:      cfg.WeComKey,
 		weComEndpoint: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send",
 		publicURL:     strings.TrimRight(cfg.PublicURL, "/"),
@@ -102,6 +105,9 @@ func New(cfg Config) (*Server, error) {
 		logger:        logger,
 		clients:       make(map[string]*clientConn),
 		pending:       make(map[string]*pendingSession),
+	}
+	if strings.TrimSpace(s.adminSecret) == "" {
+		s.adminSecret = s.secret
 	}
 	if s.publicURL != "" {
 		u, err := url.Parse(s.publicURL)
@@ -122,16 +128,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/download/anyssh-client", s.handleClientDownload)
 	mux.HandleFunc("/download/anyssh-client/", s.handleClientDownload)
 	mux.HandleFunc("/install", s.handleInstall)
-	mux.HandleFunc("/admin/", s.handleAdminPage)
-	mux.HandleFunc("/api/admin/clients", s.handleAdminClients)
-	mux.HandleFunc("/api/admin/clients/", s.handleAdminClientAction)
-	mux.HandleFunc("/api/admin/settings", s.handleAdminSettings)
+	mux.Handle("/admin", s.requireAdmin(http.HandlerFunc(s.handleAdminPage)))
+	mux.Handle("/admin/", s.requireAdmin(http.HandlerFunc(s.handleAdminPage)))
+	mux.Handle("/api/admin/clients", s.requireAdmin(http.HandlerFunc(s.handleAdminClients)))
+	mux.Handle("/api/admin/clients/", s.requireAdmin(http.HandlerFunc(s.handleAdminClientAction)))
+	mux.Handle("/api/admin/settings", s.requireAdmin(http.HandlerFunc(s.handleAdminSettings)))
 	mux.HandleFunc("/s/", s.handlePublic)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	return securityHeaders(mux)
+}
+
+func (s *Server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !secureEqual(r.Header.Get("X-AnySSH-Admin-Secret"), s.adminSecret) {
+			w.Header().Set("WWW-Authenticate", `AnySSH-Header realm="admin"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

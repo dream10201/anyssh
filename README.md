@@ -29,7 +29,9 @@ bin/anyssh-server
 在具有公网 IP 的服务器上启动：
 
 ```bash
-ANYSSH_SECRET='替换成一个足够长的随机密钥' ./bin/anyssh-server \
+ANYSSH_SECRET='替换成一个足够长的随机密钥' \
+ANYSSH_ADMIN_SECRET='替换成另一条足够长的随机密钥' \
+./bin/anyssh-server \
   -listen :8080 \
   -public-url http://1.2.3.4:8080 \
   -client-rotate 30m
@@ -51,6 +53,7 @@ docker run -d \
   -e ANYSSH_PUBLIC_URL=http://1.2.3.4:8080 \
   -e ANYSSH_CLIENT_ROTATE=30m \
   -e ANYSSH_SECRET='必填的客户端注册密钥' \
+  -e ANYSSH_ADMIN_SECRET='后台管理密钥' \
   -e ANYSSH_WECOM_KEY='企业微信群机器人 key' \
   ghcr.io/dream10201/anyssh:latest
 ```
@@ -63,6 +66,7 @@ docker run -d \
 | `ANYSSH_PUBLIC_URL` | 否 | 按请求推导 | 客户端及浏览器访问的公网地址 |
 | `ANYSSH_CLIENT_ROTATE` | 否 | `30m` | 随机链接轮换周期；`0` 表示永久 |
 | `ANYSSH_SECRET` | 是 | 无 | 客户端注册密钥；修改后旧密钥客户端无法重连 |
+| `ANYSSH_ADMIN_SECRET` | 否 | `ANYSSH_SECRET` | 后台管理请求头密钥；建议设置为独立密钥 |
 | `ANYSSH_WECOM_KEY` | 否 | 空 | 企业微信群机器人 Webhook 中的 `key` 参数 |
 
 GitHub Action 会发布 `linux/amd64`、`linux/arm64` 多平台镜像到 GHCR。每个镜像中的服务端都携带上述 13 种 Linux 客户端。
@@ -107,7 +111,18 @@ curl -fsSL http://1.2.3.4:8080/install | sudo bash
 
 设置 `ANYSSH_WECOM_KEY` 后，新链接会通过企业微信群机器人通知，内容包含主机名、系统用户、系统架构、匿名设备 ID 和访问链接。服务端使用固定官方地址 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=KEY`。
 
-当前管理后台按你的要求没有登录验证。公网部署时必须通过防火墙、VPN 或反向代理访问控制限制 `/admin/` 和 `/api/admin/`。
+管理后台的 `/admin`、`/admin/` 和 `/api/admin/` 路由要求请求头 `X-AnySSH-Admin-Secret` 与服务端的 `ANYSSH_ADMIN_SECRET` 一致。未单独设置后台密钥时会复用 `ANYSSH_SECRET`。浏览器不需要保存密钥，可以由 NAS 上的 Caddy 在反向代理时自动注入：
+
+```caddyfile
+admin.example.com {
+    reverse_proxy https://ssh.example.com {
+        header_up Host ssh.example.com
+        header_up X-AnySSH-Admin-Secret {$ANYSSH_ADMIN_SECRET}
+    }
+}
+```
+
+启动 Caddy 时，为它设置与 AnySSH 服务端相同的 `ANYSSH_ADMIN_SECRET` 环境变量。`header_up` 会覆盖客户端传入的同名请求头。此配置会让所有能访问 `admin.example.com` 的用户自动通过后台校验，因此该域名应只在 NAS 内网、VPN 或 Caddy 自身的访问控制后开放；AnySSH 源站的 8080 端口也不应直接暴露。
 
 ## HTTPS 部署
 

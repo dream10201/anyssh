@@ -86,7 +86,7 @@ func TestRegistrationPageAndSessionProxy(t *testing.T) {
 	}
 	defer remote.Close()
 
-	want := []byte{protocol.DataInputOutput, 'i', 'd', '\n'}
+	want := append([]byte{protocol.DataInputOutput}, []byte("echo 中文\n")...)
 	if err := browser.WriteMessage(websocket.BinaryMessage, want); err != nil {
 		t.Fatal(err)
 	}

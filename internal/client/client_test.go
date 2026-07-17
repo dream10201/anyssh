@@ -57,6 +57,39 @@ func TestLoginShellCommand(t *testing.T) {
 	}
 }
 
+func TestEnsureUTF8Locale(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		env  map[string]string
+		want map[string]string
+	}{
+		{
+			name: "keep existing UTF-8 locale",
+			env:  map[string]string{"LANG": "zh_CN.UTF-8", "LC_CTYPE": "zh_CN.UTF-8"},
+			want: map[string]string{"LANG": "zh_CN.UTF-8", "LC_CTYPE": "zh_CN.UTF-8"},
+		},
+		{
+			name: "replace legacy locale",
+			env:  map[string]string{"LANG": "zh_CN.GBK"},
+			want: map[string]string{"LANG": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+		},
+		{
+			name: "remove overriding LC_ALL",
+			env:  map[string]string{"LANG": "zh_CN.UTF-8", "LC_ALL": "C"},
+			want: map[string]string{"LANG": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ensureUTF8Locale(test.env, "C.UTF-8")
+			if fmt.Sprint(test.env) != fmt.Sprint(test.want) {
+				t.Fatalf("environment=%v, want %v", test.env, test.want)
+			}
+		})
+	}
+}
+
 func TestFirstAvailableShell(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -353,6 +354,7 @@ func loginEnvironment(shell string) []string {
 	env["SHELL"] = shell
 	env["TERM"] = "xterm-256color"
 	env["COLORTERM"] = "truecolor"
+	ensureUTF8Locale(env, defaultUTF8Locale())
 	if env["PATH"] == "" {
 		env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	}
@@ -361,6 +363,37 @@ func loginEnvironment(shell string) []string {
 		result = append(result, key+"="+value)
 	}
 	return result
+}
+
+func ensureUTF8Locale(env map[string]string, fallback string) {
+	effective := env["LC_ALL"]
+	if effective == "" {
+		effective = env["LC_CTYPE"]
+	}
+	if effective == "" {
+		effective = env["LANG"]
+	}
+	if isUTF8Locale(effective) {
+		return
+	}
+
+	// LC_ALL overrides LC_CTYPE. Remove a non-UTF-8 value so terminal input and
+	// output are consistently interpreted using the Web transport's UTF-8.
+	delete(env, "LC_ALL")
+	env["LANG"] = fallback
+	env["LC_CTYPE"] = fallback
+}
+
+func isUTF8Locale(locale string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(locale, "-", ""))
+	return strings.Contains(normalized, "utf8")
+}
+
+func defaultUTF8Locale() string {
+	if runtime.GOOS == "darwin" {
+		return "en_US.UTF-8"
+	}
+	return "C.UTF-8"
 }
 
 func (c *Client) dial(ctx context.Context, path string, query url.Values, header http.Header) (*websocket.Conn, error) {

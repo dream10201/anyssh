@@ -145,7 +145,7 @@ curl -fsSL https://ssh.example.com/install | sh
 
 ## 登录环境与补全
 
-Web 终端使用客户端系统用户配置的 shell，并以交互式登录模式启动。客户端会补齐 `HOME`、`USER`、`LOGNAME`、`SHELL`、`PATH`、`TERM=xterm-256color` 和 `COLORTERM=truecolor`。Bash、Zsh、Fish 会加载各自的登录初始化文件。
+Web 终端优先从 `/bin`、`/usr/bin`、`/usr/local/bin` 和 `PATH` 查找 Bash，找不到再以同样方式查找 sh，然后依次尝试 `$SHELL` 和系统账户配置的 shell。候选项必须是绝对路径且可执行；都不可用时客户端会明确报错。shell 以交互式登录模式启动，客户端会补齐 `HOME`、`USER`、`LOGNAME`、`SHELL`、`PATH`、`TERM=xterm-256color` 和 `COLORTERM=truecolor`。
 
 Tab 补全随 shell 初始化一起启用。目标机器仍需安装相应补全包，例如 Debian/Ubuntu 的 `bash-completion`；AnySSH 不会修改用户已有的 shell 配置。
 

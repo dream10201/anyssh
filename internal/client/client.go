@@ -59,7 +59,10 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("public URL: %w", err)
 	}
 	if cfg.Shell == "" {
-		cfg.Shell = defaultShell()
+		cfg.Shell, err = defaultShell()
+		if err != nil {
+			return nil, err
+		}
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -76,22 +79,57 @@ func New(cfg Config) (*Client, error) {
 	return c, nil
 }
 
-func defaultShell() string {
-	if shell := os.Getenv("SHELL"); shell != "" {
-		return shell
+func defaultShell() (string, error) {
+	available := func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && !info.IsDir() && info.Mode().Perm()&0111 != 0
 	}
+	if shell := findStandardShell(available, exec.LookPath); shell != "" {
+		return shell, nil
+	}
+
+	fallbacks := []string{os.Getenv("SHELL")}
 	if current, err := user.Current(); err == nil {
 		if output, err := exec.Command("getent", "passwd", current.Username).Output(); err == nil {
 			fields := strings.Split(strings.TrimSpace(string(output)), ":")
-			if len(fields) == 7 && strings.HasPrefix(fields[6], "/") {
-				return fields[6]
+			if len(fields) == 7 {
+				fallbacks = append(fallbacks, fields[6])
 			}
 		}
 	}
-	if _, err := os.Stat("/bin/bash"); err == nil {
-		return "/bin/bash"
+	if shell := firstAvailableShell(available, fallbacks...); shell != "" {
+		return shell, nil
 	}
-	return "/bin/sh"
+	return "", errors.New("no usable shell found")
+}
+
+func findStandardShell(available func(string) bool, lookPath func(string) (string, error)) string {
+	for _, name := range []string{"bash", "sh"} {
+		candidates := []string{
+			filepath.Join("/bin", name),
+			filepath.Join("/usr/bin", name),
+			filepath.Join("/usr/local/bin", name),
+		}
+		if path, err := lookPath(name); err == nil {
+			candidates = append(candidates, path)
+		}
+		if shell := firstAvailableShell(available, candidates...); shell != "" {
+			return shell
+		}
+	}
+	return ""
+}
+
+func firstAvailableShell(available func(string) bool, candidates ...string) string {
+	for _, shell := range candidates {
+		if !filepath.IsAbs(shell) {
+			continue
+		}
+		if available(shell) {
+			return shell
+		}
+	}
+	return ""
 }
 
 func (c *Client) Run(ctx context.Context) error {

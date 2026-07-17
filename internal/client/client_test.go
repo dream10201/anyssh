@@ -56,3 +56,72 @@ func TestLoginShellCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstAvailableShell(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		available  map[string]bool
+		candidates []string
+		want       string
+	}{
+		{name: "prefer first", available: map[string]bool{"/bin/bash": true, "/bin/sh": true}, candidates: []string{"/bin/bash", "/bin/sh"}, want: "/bin/bash"},
+		{name: "fall back to next", available: map[string]bool{"/bin/sh": true}, candidates: []string{"/bin/bash", "/bin/sh"}, want: "/bin/sh"},
+		{name: "reject relative path", available: map[string]bool{"custom-shell": true, "/opt/shell": true}, candidates: []string{"custom-shell", "/opt/shell"}, want: "/opt/shell"},
+		{name: "no shell", available: map[string]bool{}, candidates: []string{"/bin/bash", "/bin/sh"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			shell := firstAvailableShell(func(path string) bool { return test.available[path] }, test.candidates...)
+			if shell != test.want {
+				t.Fatalf("shell=%q, want %q", shell, test.want)
+			}
+		})
+	}
+}
+
+func TestFindStandardShell(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		available map[string]bool
+		paths     map[string]string
+		want      string
+	}{
+		{
+			name:      "find bash outside bin before sh",
+			available: map[string]bool{"/nix/store/current/bin/bash": true, "/bin/sh": true},
+			paths:     map[string]string{"bash": "/nix/store/current/bin/bash", "sh": "/bin/sh"},
+			want:      "/nix/store/current/bin/bash",
+		},
+		{
+			name:      "use common usr path without PATH",
+			available: map[string]bool{"/usr/bin/bash": true},
+			paths:     map[string]string{},
+			want:      "/usr/bin/bash",
+		},
+		{
+			name:      "fall back to sh from PATH",
+			available: map[string]bool{"/opt/tools/sh": true},
+			paths:     map[string]string{"sh": "/opt/tools/sh"},
+			want:      "/opt/tools/sh",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			shell := findStandardShell(
+				func(path string) bool { return test.available[path] },
+				func(name string) (string, error) {
+					path, ok := test.paths[name]
+					if !ok {
+						return "", fmt.Errorf("%s not found", name)
+					}
+					return path, nil
+				},
+			)
+			if shell != test.want {
+				t.Fatalf("shell=%q, want %q", shell, test.want)
+			}
+		})
+	}
+}

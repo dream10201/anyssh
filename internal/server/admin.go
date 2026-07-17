@@ -89,7 +89,11 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		seconds := int64(s.clientRotate / time.Second)
 		s.mu.Unlock()
-		writeJSON(w, map[string]int64{"rotate_seconds": seconds})
+		writeJSON(w, map[string]any{
+			"rotate_seconds": seconds,
+			"public_url":     s.publicURL,
+			"direct_url":     requestServerURL(r),
+		})
 	case http.MethodPut:
 		var body struct {
 			RotateSeconds int64 `json:"rotate_seconds"`
@@ -210,7 +214,7 @@ func (s *Server) notifyClientLink(c *clientConn) {
 	if s.weComKey == "" {
 		return
 	}
-	content := fmt.Sprintf("## AnySSH new link\n> Device: %s\n> User: %s\n> System: %s/%s\n> ID: %s\n[Open terminal](%s)", c.hostname, c.username, c.osName, c.arch, c.deviceID, c.link)
+	content := fmt.Sprintf("AnySSH new link\nDevice: %s\nUser: %s\nSystem: %s/%s\nID: %s\nOpen terminal: %s", c.hostname, c.username, c.osName, c.arch, c.deviceID, c.link)
 	if err := s.postWeCom(content); err != nil {
 		s.logger.Warn("enterprise WeChat notification failed", "error", err)
 	}
@@ -221,7 +225,7 @@ func (s *Server) postWeCom(content string) error {
 		return errors.New("ANYSSH_WECOM_KEY is not configured")
 	}
 	hook := s.weComEndpoint + "?key=" + url.QueryEscape(s.weComKey)
-	body, _ := json.Marshal(map[string]any{"msgtype": "markdown", "markdown": map[string]string{"content": content}})
+	body, _ := json.Marshal(map[string]any{"msgtype": "text", "text": map[string]string{"content": content}})
 	resp, err := http.Post(hook, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err

@@ -15,6 +15,35 @@ const esc = (s) =>
         c
       ],
   );
+const installCommand = (base) =>
+  `curl -fsSL ${base.replace(/\/$/, "")}/install | sudo bash`;
+const copyText = async (value) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("复制失败，请手动选择命令");
+};
+const showInstallCommands = (settings) => {
+  const publicCommand = $("#publicUrlCommand");
+  const publicCopy = document.querySelector('[data-copy="publicUrlCommand"]');
+  if (settings.public_url) {
+    publicCommand.textContent = installCommand(settings.public_url);
+    publicCopy.disabled = false;
+  } else {
+    publicCommand.textContent = "未配置 ANYSSH_PUBLIC_URL";
+  }
+  $("#directUrlCommand").textContent = installCommand(settings.direct_url);
+  document.querySelector('[data-copy="directUrlCommand"]').disabled = false;
+};
 async function load() {
   const rows = await api("/api/admin/clients");
   $("#clients").innerHTML =
@@ -29,6 +58,11 @@ document.addEventListener("click", async (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   try {
+    if (b.dataset.copy) {
+      await copyText($("#" + b.dataset.copy).textContent);
+      $("#message").textContent = "安装命令已复制";
+      return;
+    }
     if (b.dataset.open) open(b.dataset.open, "_blank");
     if (b.dataset.rotate)
       await api("/api/admin/clients/" + b.dataset.rotate + "/rotate", {
@@ -58,6 +92,7 @@ document.addEventListener("click", async (e) => {
 (async () => {
   const s = await api("/api/admin/settings");
   $("#rotation").value = s.rotate_seconds / 60;
+  showInstallCommands(s);
   await load();
 })();
 setInterval(load, 5000);

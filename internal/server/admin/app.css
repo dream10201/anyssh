@@ -86,6 +86,39 @@ input {
   flex-wrap: wrap;
   gap: 8px;
 }
+.install-methods {
+  display: grid;
+  gap: 12px;
+}
+.install-label {
+  margin-bottom: 6px;
+  color: #596168;
+  font-size: 13px;
+  font-weight: 600;
+}
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border: 1px solid #dfe3e6;
+  background: #fff;
+}
+.command-row code {
+  min-width: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  color: #293138;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.command-row button {
+  width: 64px;
+  margin: 0;
+}
+.command-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 #message {
   font-size: 13px;
   color: #376b4c;
@@ -96,5 +129,8 @@ input {
   }
   input {
     min-width: 100%;
+  }
+  .command-row {
+    grid-template-columns: minmax(0, 1fr) 56px;
   }
 }

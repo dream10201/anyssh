@@ -91,6 +91,10 @@ func (s *Server) installServerURL(r *http.Request) string {
 	if s.publicURL != "" {
 		return s.publicURL
 	}
+	return requestServerURL(r)
+}
+
+func requestServerURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"

@@ -429,12 +429,12 @@ func TestWeComWebhookPayload(t *testing.T) {
 	if err := srv.postWeCom("test content"); err != nil {
 		t.Fatal(err)
 	}
-	markdown, ok := payload["markdown"].(map[string]any)
-	if payload["msgtype"] != "markdown" || !ok || markdown["content"] != "test content" {
+	text, ok := payload["text"].(map[string]any)
+	if payload["msgtype"] != "text" || !ok || text["content"] != "test content" {
 		t.Fatalf("payload: %#v", payload)
 	}
-	if payload["msgtype"] != "markdown" {
-		t.Fatal("unexpected message type")
+	if _, exists := payload["markdown"]; exists {
+		t.Fatal("unexpected markdown payload")
 	}
 }
 
@@ -477,12 +477,16 @@ func TestRotationIsRecoveredFromReconnectingClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var settings map[string]int64
-	if json.NewDecoder(resp.Body).Decode(&settings) != nil {
+	var settingsBody struct {
+		RotateSeconds int64  `json:"rotate_seconds"`
+		PublicURL     string `json:"public_url"`
+		DirectURL     string `json:"direct_url"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&settingsBody) != nil {
 		t.Fatal("decode settings")
 	}
-	if settings["rotate_seconds"] != 0 {
-		t.Fatalf("settings: %+v", settings)
+	if settingsBody.RotateSeconds != 0 || settingsBody.PublicURL != "" || settingsBody.DirectURL != httpServer.URL {
+		t.Fatalf("settings: %+v", settingsBody)
 	}
 }
 

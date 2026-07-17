@@ -3,62 +3,122 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>AnySSH 管理</title>
+    <meta name="color-scheme" content="light" />
+    <title>AnySSH · 客户端管理</title>
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <header><strong>AnySSH</strong><span>客户端管理</span></header>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/admin/" aria-label="AnySSH 管理首页">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <span>AnySSH</span>
+        </a>
+        <span class="topbar-divider"></span>
+        <span class="topbar-title">管理控制台</span>
+      </div>
+    </header>
+
     <main>
-      <section>
-        <h1>链接设置</h1>
-        <div class="settings">
-          <input id="rotation" type="number" min="0" step="1" /><span
-            >分钟（0 表示永久）</span
-          ><button id="saveRotation">保存</button>
+      <div class="page-heading">
+        <div>
+          <p class="eyebrow">REMOTE ACCESS</p>
+          <h1>客户端管理</h1>
+          <p class="page-description">管理设备的终端入口、链接轮换与访问权限。</p>
         </div>
-        <p id="message"></p>
+        <div class="summary" aria-label="客户端概览">
+          <div class="summary-item">
+            <strong id="onlineCount">—</strong>
+            <span>可访问</span>
+          </div>
+          <div class="summary-item">
+            <strong id="restrictedCount">—</strong>
+            <span>受限</span>
+          </div>
+        </div>
+      </div>
+
+      <section class="panel rotation-panel" aria-labelledby="rotationTitle">
+        <div class="panel-heading">
+          <div>
+            <div class="title-line">
+              <h2 id="rotationTitle">链接自动轮换</h2>
+              <button
+                class="info-button"
+                type="button"
+                aria-label="查看链接轮换说明"
+                title="按设定周期为所有在线客户端生成新链接，旧链接随即失效。"
+              >?</button>
+            </div>
+            <p>定期更换客户端访问链接，降低旧链接长期泄露的风险。</p>
+          </div>
+          <span class="setting-state" id="rotationState">读取中</span>
+        </div>
+        <div class="rotation-form">
+          <label for="rotation">轮换周期</label>
+          <div class="field-with-unit">
+            <input id="rotation" type="number" min="0" step="1" inputmode="numeric" />
+            <span>分钟</span>
+          </div>
+          <button class="button primary" id="saveRotation" type="button">保存设置</button>
+          <span class="field-hint">设为 0 时不自动轮换</span>
+        </div>
       </section>
-      <section>
-        <h2>客户端安装</h2>
-        <div class="install-methods">
+
+      <details class="panel install-panel">
+        <summary>
+          <span>
+            <strong>安装新客户端</strong>
+            <small>复制命令到目标设备执行</small>
+          </span>
+          <span class="summary-action">展开</span>
+        </summary>
+        <div class="install-content">
           <div class="install-method">
-            <div class="install-label">ANYSSH_PUBLIC_URL</div>
+            <div class="install-label">公网地址</div>
             <div class="command-row">
               <code id="publicUrlCommand">加载中...</code>
-              <button class="copy secondary" data-copy="publicUrlCommand" disabled>
-                复制
-              </button>
+              <button class="button copy-button" data-copy="publicUrlCommand" type="button" disabled>复制</button>
             </div>
           </div>
           <div class="install-method">
-            <div class="install-label">公网 IP / 当前直连地址</div>
+            <div class="install-label">当前直连地址</div>
             <div class="command-row">
               <code id="directUrlCommand">加载中...</code>
-              <button class="copy secondary" data-copy="directUrlCommand" disabled>
-                复制
-              </button>
+              <button class="button copy-button" data-copy="directUrlCommand" type="button" disabled>复制</button>
             </div>
           </div>
         </div>
-      </section>
-      <section>
-        <h2>已连接客户端</h2>
+      </details>
+
+      <section class="clients-section" aria-labelledby="clientsTitle">
+        <div class="section-heading">
+          <div>
+            <h2 id="clientsTitle">已连接客户端</h2>
+            <p>访问有效期只限制当前设备的终端入口，不会卸载或停止客户端。</p>
+          </div>
+          <button class="button ghost" id="refreshClients" type="button">刷新</button>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>设备</th>
-                <th>系统</th>
-                <th>状态</th>
-                <th>过期时间</th>
-                <th>操作</th>
+                <th>运行环境</th>
+                <th>访问状态</th>
+                <th>访问有效期</th>
+                <th class="actions-heading">操作</th>
               </tr>
             </thead>
-            <tbody id="clients"></tbody>
+            <tbody id="clients">
+              <tr class="loading-row"><td colspan="5">正在读取客户端…</td></tr>
+            </tbody>
           </table>
         </div>
       </section>
     </main>
+
+    <div id="message" class="toast" role="status" aria-live="polite"></div>
     <script src="app.js"></script>
   </body>
 </html>

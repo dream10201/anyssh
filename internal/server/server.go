@@ -227,14 +227,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	c.noteVersion = note.version
 	old := s.clients[token]
 	s.clients[token] = c
+	// Snapshot the just-published values while still holding the lock; once c is in
+	// s.clients an admin request may mutate these c.mu-guarded fields concurrently.
+	rotateSeconds, rotateVersion := c.rotateSeconds, c.rotateVersion
+	noteText, noteVersion := c.note, c.noteVersion
 	s.mu.Unlock()
 	if old != nil {
 		old.close()
 	}
 	s.logger.Info("client registered", "token_prefix", token[:8])
-	_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: c.rotateSeconds, RotateVersion: c.rotateVersion})
-	if c.note != "" || c.noteVersion > 0 {
-		_ = c.writeJSON(protocol.ControlMessage{Type: "set_note", Note: c.note, NoteVersion: c.noteVersion})
+	_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: rotateSeconds, RotateVersion: rotateVersion})
+	if noteText != "" || noteVersion > 0 {
+		_ = c.writeJSON(protocol.ControlMessage{Type: "set_note", Note: noteText, NoteVersion: noteVersion})
 	}
 	go s.notifyClientLink(c)
 
@@ -423,7 +427,14 @@ func (c *clientConn) close() {
 	}
 }
 
+// maxRelayMessage bounds a single proxied WebSocket frame so a client holding a
+// link cannot exhaust server memory with one enormous message. It must stay at
+// or above the client's file-upload cap (64 MiB) so legitimate uploads pass.
+const maxRelayMessage = 64<<20 + 64<<10
+
 func proxyWebSockets(a, b *websocket.Conn) {
+	a.SetReadLimit(maxRelayMessage)
+	b.SetReadLimit(maxRelayMessage)
 	done := make(chan struct{}, 2)
 	copyOne := func(dst, src *websocket.Conn) {
 		defer func() { done <- struct{}{} }()

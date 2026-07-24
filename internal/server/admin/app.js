@@ -82,54 +82,74 @@ const clientRow = (client) => {
   const expiry = toLocalInputValue(client.expires_at);
   const rotationMinutes = client.rotate_seconds / 60;
   const expiryNote = client.expires_at ? "到点后当前会话将断开" : "留空表示长期有效";
+  const rotationNote = rotationMinutes === 0 ? "不自动轮换" : `每 ${esc(rotationMinutes)} 分钟更换`;
   return `
-    <tr>
-      <td data-label="设备">
-        <strong class="device-name" title="${esc(client.hostname)}">${esc(client.hostname)}</strong>
-        <div class="device-meta" title="${esc(client.username)} · ${esc(client.id)}">${esc(client.username)} · ${esc(client.id)}</div>
-      </td>
-      <td data-label="运行环境"><span class="runtime">${esc(client.os)}/${esc(client.arch)}</span></td>
-      <td data-label="访问状态"><span class="status ${state.className}">${state.label}</span></td>
-      <td data-label="链接轮换">
-        <div class="rotation-control">
-          <div class="compact-number">
-            <input type="number" min="0" step="1" inputmode="numeric" value="${esc(rotationMinutes)}" data-rotation="${esc(client.id)}" aria-label="${esc(client.hostname)} 的链接轮换周期" />
-            <span>分钟</span>
+    <article class="client-card">
+      <header class="card-head">
+        <div class="card-identity">
+          <strong class="device-name" title="${esc(client.hostname)}">${esc(client.hostname)}</strong>
+          <div class="device-meta" title="${esc(client.username)} · ${esc(client.id)}">${esc(client.username)} · ${esc(client.id)}</div>
+        </div>
+        <div class="card-badges">
+          <span class="status ${state.className}">${state.label}</span>
+          <span class="runtime">${esc(client.os)}/${esc(client.arch)}</span>
+        </div>
+      </header>
+      <div class="card-fields">
+        <div class="field">
+          <label>链接轮换</label>
+          <div class="field-control">
+            <div class="compact-number">
+              <input type="number" min="0" step="1" inputmode="numeric" value="${esc(rotationMinutes)}" data-rotation="${esc(client.id)}" aria-label="${esc(client.hostname)} 的链接轮换周期" />
+              <span>分钟</span>
+            </div>
+            <button class="button subtle" type="button" data-set-rotation="${esc(client.id)}">应用</button>
+            <span class="field-note">${rotationNote}</span>
           </div>
-          <button class="button subtle" type="button" data-set-rotation="${esc(client.id)}">应用</button>
         </div>
-        <span class="expiry-note">${rotationMinutes === 0 ? "不自动轮换" : `每 ${esc(rotationMinutes)} 分钟更换`}</span>
-      </td>
-      <td data-label="访问有效期">
-        <div class="expiry-control">
-          <input class="expiry-input" type="datetime-local" value="${esc(expiry)}" data-expire="${esc(client.id)}" aria-label="${esc(client.hostname)} 的访问截止时间" />
-          <button class="button subtle" type="button" data-exp="${esc(client.id)}">应用</button>
-          ${client.expires_at ? `<button class="button subtle" type="button" data-clear-exp="${esc(client.id)}">清除</button>` : ""}
+        <div class="field">
+          <label>访问有效期</label>
+          <div class="field-control">
+            <input class="expiry-input" type="datetime-local" value="${esc(expiry)}" data-expire="${esc(client.id)}" aria-label="${esc(client.hostname)} 的访问截止时间" />
+            <button class="button subtle" type="button" data-exp="${esc(client.id)}">应用</button>
+            ${client.expires_at ? `<button class="button subtle" type="button" data-clear-exp="${esc(client.id)}">清除</button>` : ""}
+            <span class="field-note">${expiryNote}</span>
+          </div>
         </div>
-        <span class="expiry-note">${expiryNote}</span>
-      </td>
-      <td data-label="操作">
-        <div class="row-actions">
-          <button class="button primary" type="button" data-open="${esc(client.link)}">打开终端</button>
-          <button class="button ghost" type="button" data-rotate="${esc(client.id)}">更换链接</button>
-          <button class="button ${client.disabled ? "subtle" : "danger"}" type="button" data-disable="${esc(client.id)}" data-value="${!client.disabled}">${client.disabled ? "启用" : "禁用"}</button>
+        <div class="field field-note-block">
+          <label>备注</label>
+          <div class="field-control">
+            <textarea class="note-input" rows="2" maxlength="1024" placeholder="设备备注，将下发到客户端保存" data-note="${esc(client.id)}" aria-label="${esc(client.hostname)} 的备注">${esc(client.note)}</textarea>
+            <button class="button subtle" type="button" data-set-note="${esc(client.id)}">保存备注</button>
+          </div>
         </div>
-      </td>
-    </tr>`;
+      </div>
+      <footer class="card-actions">
+        <button class="button primary" type="button" data-open="${esc(client.link)}">打开终端</button>
+        <button class="button ghost" type="button" data-rotate="${esc(client.id)}">更换链接</button>
+        <button class="button ${client.disabled ? "subtle" : "danger"}" type="button" data-disable="${esc(client.id)}" data-value="${!client.disabled}">${client.disabled ? "启用" : "禁用"}</button>
+      </footer>
+    </article>`;
 };
 
 let loadingClients = false;
+let lastSnapshot = "";
 async function loadClients({ force = false } = {}) {
   if (loadingClients) return;
-  if (!force && document.activeElement?.matches(".expiry-input, [data-rotation]")) return;
+  if (!force && document.activeElement?.matches(".expiry-input, [data-rotation], .note-input")) return;
   loadingClients = true;
   const refreshButton = $("#refreshClients");
   refreshButton.disabled = true;
   try {
     const rows = await api("/api/admin/clients");
+    const snapshot = JSON.stringify(rows);
+    // Rows arrive in a stable order from the server, so an identical snapshot means
+    // nothing changed: skip the re-render to avoid flicker and preserve unsaved edits.
+    if (!force && snapshot === lastSnapshot) return;
+    lastSnapshot = snapshot;
     $("#clients").innerHTML = rows.length
       ? rows.map(clientRow).join("")
-      : '<tr><td class="empty-state" colspan="6">暂无已连接客户端</td></tr>';
+      : '<div class="grid-placeholder">暂无已连接客户端</div>';
     const states = rows.map(clientState);
     $("#onlineCount").textContent = states.filter((state) => state.className === "online").length;
     $("#restrictedCount").textContent = states.filter((state) => state.className !== "online").length;
@@ -220,6 +240,17 @@ document.addEventListener("click", async (event) => {
       showMessage(value ? "访问截止时间已更新" : "已设为长期有效");
     }
 
+    if (button.dataset.setNote) {
+      const id = button.dataset.setNote;
+      const input = document.querySelector(`[data-note="${CSS.escape(id)}"]`);
+      setButtonBusy(button, true);
+      await api(`/api/admin/clients/${encodeURIComponent(id)}/note`, {
+        method: "POST",
+        body: JSON.stringify({ note: input.value }),
+      });
+      showMessage("备注已保存并下发给客户端");
+    }
+
     if (button.id === "refreshClients") {
       await loadClients({ force: true });
       showMessage("客户端列表已刷新");
@@ -244,5 +275,6 @@ document.addEventListener("click", async (event) => {
 })();
 
 setInterval(() => {
+  if (document.hidden) return;
   loadClients().catch((error) => showMessage(error.message, "error"));
 }, 5000);

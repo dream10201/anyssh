@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,7 @@ type Client struct {
 	logger          *slog.Logger
 	rotation        atomic.Int64
 	rotationVersion atomic.Int64
+	notes           *noteStore
 }
 
 func New(cfg Config) (*Client, error) {
@@ -75,6 +77,7 @@ func New(cfg Config) (*Client, error) {
 		serverURL: serverURL,
 		publicURL: publicURL,
 		logger:    logger,
+		notes:     newNoteStore(),
 	}
 	c.rotation.Store(int64(cfg.RotateEvery))
 	return c, nil
@@ -181,6 +184,7 @@ var errRotate = errors.New("rotate requested")
 func (c *Client) keepRegistered(ctx context.Context, token string) bool {
 	backoff := time.Second
 	for ctx.Err() == nil {
+		noteText, noteVersion := c.notes.snapshot()
 		ws, err := c.dial(ctx, "/api/register", url.Values{"token": {token}}, http.Header{
 			"X-AnySSH-Secret":          []string{c.cfg.Secret},
 			"X-AnySSH-Device-ID":       []string{c.device.ID},
@@ -190,6 +194,8 @@ func (c *Client) keepRegistered(ctx context.Context, token string) bool {
 			"X-AnySSH-Device-Arch":     []string{c.device.Arch},
 			"X-AnySSH-Rotate-Seconds":  []string{fmt.Sprint(c.rotation.Load() / int64(time.Second))},
 			"X-AnySSH-Rotate-Version":  []string{fmt.Sprint(c.rotationVersion.Load())},
+			"X-AnySSH-Note":            []string{base64.StdEncoding.EncodeToString([]byte(noteText))},
+			"X-AnySSH-Note-Version":    []string{fmt.Sprint(noteVersion)},
 		})
 		if err != nil {
 			c.logger.Warn("connect to server failed", "error", err, "retry_in", backoff)
@@ -231,6 +237,10 @@ func (c *Client) serveControl(ctx context.Context, ws *websocket.Conn) error {
 				c.rotation.Store(msg.RotateSeconds * int64(time.Second))
 				c.rotationVersion.Store(msg.RotateVersion)
 				c.logger.Info("link rotation updated", "interval", time.Duration(c.rotation.Load()))
+			} else if msg.Type == "set_note" {
+				if c.notes.apply(msg.Note, msg.NoteVersion) {
+					c.logger.Info("device note updated", "version", msg.NoteVersion)
+				}
 			}
 		}
 	}()
@@ -260,6 +270,7 @@ func (c *Client) runSession(ctx context.Context, id, key string) {
 		return
 	}
 	defer ws.Close()
+	ws.SetReadLimit(maxUploadSize + 4096)
 
 	cmd := loginShellCommand(ctx, c.cfg.Shell)
 	cmd.Env = loginEnvironment(c.cfg.Shell)
@@ -316,6 +327,25 @@ func (c *Client) runSession(ctx context.Context, id, key string) {
 			var size protocol.Resize
 			if json.Unmarshal(data[1:], &size) == nil && size.Cols > 0 && size.Rows > 0 {
 				_ = pty.Setsize(ptmx, &pty.Winsize{Cols: size.Cols, Rows: size.Rows})
+			}
+		case protocol.DataFileUpload:
+			pid := 0
+			if cmd.Process != nil {
+				pid = cmd.Process.Pid
+			}
+			result := handleUpload(data[1:], pid)
+			if result.OK {
+				c.logger.Info("file uploaded", "path", result.Path, "size", result.Size)
+			} else {
+				c.logger.Warn("file upload failed", "error", result.Message)
+			}
+			payload, _ := json.Marshal(result)
+			frame := append([]byte{protocol.DataUploadResult}, payload...)
+			writeMu.Lock()
+			writeErr := ws.WriteMessage(websocket.BinaryMessage, frame)
+			writeMu.Unlock()
+			if writeErr != nil {
+				return
 			}
 		}
 		select {

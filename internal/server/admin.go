@@ -2,12 +2,14 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +27,41 @@ type adminClient struct {
 	Disabled      bool       `json:"disabled"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	RotateSeconds int64      `json:"rotate_seconds"`
+	Note          string     `json:"note"`
+}
+
+const maxNoteLength = 1024
+
+// decodeNoteHeader decodes the base64 note a client reports on registration and
+// normalizes it. Invalid encodings are treated as an empty note.
+func decodeNoteHeader(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return ""
+	}
+	return cleanNote(string(raw))
+}
+
+// cleanNote strips control characters (keeping tab and newline) and caps the
+// length so a note is safe to store and forward.
+func cleanNote(note string) string {
+	note = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, note)
+	if len(note) > maxNoteLength {
+		note = note[:maxNoteLength]
+	}
+	return note
 }
 
 func cleanHeader(value, fallback string) string {
@@ -73,7 +110,7 @@ func (s *Server) handleAdminClients(w http.ResponseWriter, r *http.Request) {
 	result := make([]adminClient, 0, len(clients))
 	for _, c := range clients {
 		c.mu.Lock()
-		item := adminClient{ID: c.deviceID, Hostname: c.hostname, Username: c.username, OS: c.osName, Arch: c.arch, Link: c.link, RegisteredAt: c.registeredAt, Disabled: c.disabled, RotateSeconds: c.rotateSeconds}
+		item := adminClient{ID: c.deviceID, Hostname: c.hostname, Username: c.username, OS: c.osName, Arch: c.arch, Link: c.link, RegisteredAt: c.registeredAt, Disabled: c.disabled, RotateSeconds: c.rotateSeconds, Note: c.note}
 		if !c.expiresAt.IsZero() {
 			x := c.expiresAt
 			item.ExpiresAt = &x
@@ -81,6 +118,14 @@ func (s *Server) handleAdminClients(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 		result = append(result, item)
 	}
+	// Stable ordering keeps the admin list from reshuffling between refreshes and
+	// lets the browser skip re-rendering when nothing has actually changed.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Hostname != result[j].Hostname {
+			return result[i].Hostname < result[j].Hostname
+		}
+		return result[i].ID < result[j].ID
+	})
 	writeJSON(w, result)
 }
 
@@ -132,6 +177,30 @@ func (s *Server) handleAdminClientAction(w http.ResponseWriter, r *http.Request)
 		s.rotations[c.deviceID] = rotationSetting{seconds: body.RotateSeconds, version: version}
 		s.mu.Unlock()
 		if err := c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: body.RotateSeconds, RotateVersion: version}); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+	case "note":
+		var body struct {
+			Note string `json:"note"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		note := cleanNote(body.Note)
+		c.mu.Lock()
+		version := time.Now().UnixNano()
+		if version <= c.noteVersion {
+			version = c.noteVersion + 1
+		}
+		c.note = note
+		c.noteVersion = version
+		c.mu.Unlock()
+		s.mu.Lock()
+		s.notes[c.deviceID] = noteSetting{text: note, version: version}
+		s.mu.Unlock()
+		if err := c.writeJSON(protocol.ControlMessage{Type: "set_note", Note: note, NoteVersion: version}); err != nil {
 			http.Error(w, err.Error(), 502)
 			return
 		}

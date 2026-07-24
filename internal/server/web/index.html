@@ -9,10 +9,32 @@
 </head>
 <body>
   <header>
-    <strong>AnySSH</strong>
-    <span id="status" data-state="connecting">Connecting</span>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span class="brand-name">AnySSH</span>
+    </div>
+    <div class="header-right">
+      <button id="uploadButton" class="icon-button" type="button" title="上传文件到当前目录" disabled>
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/></svg>
+        <span>上传文件</span>
+      </button>
+      <span id="status" data-state="connecting">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-text">连接中</span>
+      </span>
+      <input id="fileInput" type="file" hidden>
+    </div>
   </header>
-  <main id="terminal" aria-label="Remote terminal"></main>
+  <main class="terminal-wrap">
+    <div id="terminal" aria-label="Remote terminal"></div>
+    <div id="dropzone" class="dropzone" aria-hidden="true">
+      <div class="dropzone-inner">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/></svg>
+        <span>释放以上传到当前目录</span>
+        <small>单文件最大 64 MiB</small>
+      </div>
+    </div>
+  </main>
   <script src="vendor/xterm.js"></script>
   <script src="vendor/addon-fit.js"></script>
   <script src="app.js"></script>

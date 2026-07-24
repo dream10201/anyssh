@@ -46,6 +46,7 @@ type Server struct {
 	mu        sync.Mutex
 	clients   map[string]*clientConn
 	rotations map[string]rotationSetting
+	notes     map[string]noteSetting
 	pending   map[string]*pendingSession
 	web       http.Handler
 	admin     http.Handler
@@ -64,6 +65,8 @@ type clientConn struct {
 	expiresAt     time.Time
 	rotateSeconds int64
 	rotateVersion int64
+	note          string
+	noteVersion   int64
 	ws            *websocket.Conn
 
 	writeMu sync.Mutex
@@ -80,6 +83,11 @@ type pendingSession struct {
 
 type rotationSetting struct {
 	seconds int64
+	version int64
+}
+
+type noteSetting struct {
+	text    string
 	version int64
 }
 
@@ -112,6 +120,7 @@ func New(cfg Config) (*Server, error) {
 		logger:        logger,
 		clients:       make(map[string]*clientConn),
 		rotations:     make(map[string]rotationSetting),
+		notes:         make(map[string]noteSetting),
 		pending:       make(map[string]*pendingSession),
 	}
 	if strings.TrimSpace(s.adminSecret) == "" {
@@ -196,6 +205,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if versionErr != nil || reportedVersion < 0 {
 		reportedVersion = 0
 	}
+	reportedNote := decodeNoteHeader(r.Header.Get("X-AnySSH-Note"))
+	reportedNoteVersion, noteVersionErr := strconv.ParseInt(r.Header.Get("X-AnySSH-Note-Version"), 10, 64)
+	if noteVersionErr != nil || reportedNoteVersion < 0 {
+		reportedNoteVersion = 0
+	}
 	s.mu.Lock()
 	rotation, exists := s.rotations[c.deviceID]
 	if !exists || reportedVersion > rotation.version {
@@ -204,6 +218,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	c.rotateSeconds = rotation.seconds
 	c.rotateVersion = rotation.version
+	note, noteExists := s.notes[c.deviceID]
+	if !noteExists || reportedNoteVersion > note.version {
+		note = noteSetting{text: reportedNote, version: reportedNoteVersion}
+		s.notes[c.deviceID] = note
+	}
+	c.note = note.text
+	c.noteVersion = note.version
 	old := s.clients[token]
 	s.clients[token] = c
 	s.mu.Unlock()
@@ -212,6 +233,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Info("client registered", "token_prefix", token[:8])
 	_ = c.writeJSON(protocol.ControlMessage{Type: "set_rotate", RotateSeconds: c.rotateSeconds, RotateVersion: c.rotateVersion})
+	if c.note != "" || c.noteVersion > 0 {
+		_ = c.writeJSON(protocol.ControlMessage{Type: "set_note", Note: c.note, NoteVersion: c.noteVersion})
+	}
 	go s.notifyClientLink(c)
 
 	ws.SetReadLimit(4096)

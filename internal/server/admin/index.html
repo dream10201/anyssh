@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#111315" />
     <title>AnySSH · 客户端管理</title>
     <link rel="stylesheet" href="app.css" />
   </head>
@@ -72,22 +73,8 @@
           </div>
           <button class="button ghost" id="refreshClients" type="button">刷新</button>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>设备</th>
-                <th>运行环境</th>
-                <th>访问状态</th>
-                <th>链接轮换</th>
-                <th>访问有效期</th>
-                <th class="actions-heading">操作</th>
-              </tr>
-            </thead>
-            <tbody id="clients">
-              <tr class="loading-row"><td colspan="6">正在读取客户端…</td></tr>
-            </tbody>
-          </table>
+        <div id="clients" class="client-grid" aria-live="polite">
+          <div class="grid-placeholder">正在读取客户端…</div>
         </div>
       </section>
     </main>

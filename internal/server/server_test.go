@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -562,6 +563,140 @@ func TestClientRotationSurvivesClientReconnect(t *testing.T) {
 	defer second.Close()
 	if second.ReadJSON(&message) != nil || message.RotateSeconds != 300 {
 		t.Fatalf("rotation after reconnect: %+v", message)
+	}
+}
+
+func TestDeviceNoteFlow(t *testing.T) {
+	srv, err := New(Config{SharedSecret: "secret", AdminSecret: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/register?token="
+	header := http.Header{
+		"X-AnySSH-Secret":    []string{"secret"},
+		"X-AnySSH-Device-ID": []string{"device-1"},
+	}
+	control, _, err := websocket.DefaultDialer.Dial(wsURL+strings.Repeat("a", 64), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg protocol.ControlMessage
+	if control.ReadJSON(&msg) != nil || msg.Type != "set_rotate" {
+		t.Fatalf("initial message: %+v", msg)
+	}
+
+	putAdminJSON(t, http.MethodPost, httpServer.URL+"/api/admin/clients/device-1/note", `{"note":"web-01 生产环境"}`, srv.adminSecret)
+	if control.ReadJSON(&msg) != nil || msg.Type != "set_note" || msg.Note != "web-01 生产环境" || msg.NoteVersion <= 0 {
+		t.Fatalf("note update: %+v", msg)
+	}
+
+	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/clients", "", srv.adminSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clients []adminClient
+	if json.NewDecoder(resp.Body).Decode(&clients) != nil {
+		t.Fatal("decode clients")
+	}
+	_ = resp.Body.Close()
+	if len(clients) != 1 || clients[0].Note != "web-01 生产环境" {
+		t.Fatalf("clients note: %+v", clients)
+	}
+	_ = control.Close()
+
+	// A restarted client reports version 0; the server-remembered note wins.
+	second, _, err := websocket.DefaultDialer.Dial(wsURL+strings.Repeat("b", 64), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if second.ReadJSON(&msg) != nil || msg.Type != "set_rotate" {
+		t.Fatalf("reconnect rotate: %+v", msg)
+	}
+	if second.ReadJSON(&msg) != nil || msg.Type != "set_note" || msg.Note != "web-01 生产环境" {
+		t.Fatalf("reconnect note: %+v", msg)
+	}
+}
+
+func TestClientReportedNoteWinsWithHigherVersion(t *testing.T) {
+	srv, err := New(Config{SharedSecret: "secret", AdminSecret: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/register?token="
+	header := http.Header{
+		"X-AnySSH-Secret":       []string{"secret"},
+		"X-AnySSH-Device-ID":    []string{"device-1"},
+		"X-AnySSH-Note":         []string{base64.StdEncoding.EncodeToString([]byte("client note"))},
+		"X-AnySSH-Note-Version": []string{"5"},
+	}
+	control, _, err := websocket.DefaultDialer.Dial(wsURL+strings.Repeat("a", 64), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/clients", "", srv.adminSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clients []adminClient
+	if json.NewDecoder(resp.Body).Decode(&clients) != nil {
+		t.Fatal("decode clients")
+	}
+	_ = resp.Body.Close()
+	if len(clients) != 1 || clients[0].Note != "client note" {
+		t.Fatalf("client-reported note not adopted: %+v", clients)
+	}
+}
+
+func TestAdminClientsAreSortedByHostname(t *testing.T) {
+	srv, err := New(Config{SharedSecret: "secret", AdminSecret: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/register?token="
+	register := func(token, id, hostname string) *websocket.Conn {
+		header := http.Header{
+			"X-AnySSH-Secret":          []string{"secret"},
+			"X-AnySSH-Device-ID":       []string{id},
+			"X-AnySSH-Device-Hostname": []string{hostname},
+		}
+		conn, _, dialErr := websocket.DefaultDialer.Dial(wsURL+token, header)
+		if dialErr != nil {
+			t.Fatal(dialErr)
+		}
+		return conn
+	}
+	z := register(strings.Repeat("a", 64), "device-z", "zeta")
+	defer z.Close()
+	a := register(strings.Repeat("b", 64), "device-a", "alpha")
+	defer a.Close()
+
+	var clients []adminClient
+	// Poll briefly so both registrations are visible regardless of goroutine timing.
+	for attempt := 0; attempt < 20; attempt++ {
+		resp, reqErr := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/clients", "", srv.adminSecret)
+		if reqErr != nil {
+			t.Fatal(reqErr)
+		}
+		clients = nil
+		if json.NewDecoder(resp.Body).Decode(&clients) != nil {
+			t.Fatal("decode clients")
+		}
+		_ = resp.Body.Close()
+		if len(clients) == 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(clients) != 2 || clients[0].Hostname != "alpha" || clients[1].Hostname != "zeta" {
+		t.Fatalf("expected hostname-sorted clients, got %+v", clients)
 	}
 }
 

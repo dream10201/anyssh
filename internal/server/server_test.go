@@ -700,6 +700,91 @@ func TestAdminClientsAreSortedByHostname(t *testing.T) {
 	}
 }
 
+func TestMalformedClientDataDoesNotCrashServer(t *testing.T) {
+	srv, err := New(Config{SharedSecret: "secret", AdminSecret: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	base := "ws" + strings.TrimPrefix(httpServer.URL, "http")
+
+	// 1) Invalid tokens must be rejected before any upgrade, never panic.
+	for _, tok := range []string{"", "short", strings.Repeat("z", 64), strings.Repeat("a", 63)} {
+		conn, resp, dialErr := websocket.DefaultDialer.Dial(base+"/api/register?token="+tok, http.Header{"X-AnySSH-Secret": {"secret"}})
+		if dialErr == nil {
+			conn.Close()
+			t.Fatalf("expected rejection for token %q", tok)
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}
+
+	// 2) A valid token with deliberately garbage headers must be tolerated.
+	oversizedNote := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("中", 600))) // 1800 bytes -> truncated mid-rune
+	junk := http.Header{
+		"X-AnySSH-Secret":          {"secret"},
+		"X-AnySSH-Device-ID":       {strings.Repeat("x", 5000)},
+		"X-AnySSH-Device-Hostname": {strings.Repeat("主机名", 200)},
+		"X-AnySSH-Rotate-Seconds":  {"not-a-number"},
+		"X-AnySSH-Rotate-Version":  {"-999"},
+		"X-AnySSH-Note":            {"!!!not-valid-base64!!!"},
+		"X-AnySSH-Note-Version":    {"nope"},
+	}
+	conn, _, err := websocket.DefaultDialer.Dial(base+"/api/register?token="+strings.Repeat("a", 64), junk)
+	if err != nil {
+		t.Fatalf("register with junk headers failed: %v", err)
+	}
+	var msg protocol.ControlMessage
+	if conn.ReadJSON(&msg) != nil || msg.Type != "set_rotate" {
+		t.Fatalf("expected set_rotate after junk register, got %+v", msg)
+	}
+	// Junk on the control channel must not crash the discard loop.
+	_ = conn.WriteMessage(websocket.BinaryMessage, bytes.Repeat([]byte{0xff}, 8192))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("{garbage json"))
+	_ = conn.Close()
+
+	// 3) A registration carrying an oversized (valid-base64) note must be stored
+	//    without breaking the admin JSON response.
+	conn2, _, err := websocket.DefaultDialer.Dial(base+"/api/register?token="+strings.Repeat("b", 64),
+		http.Header{"X-AnySSH-Secret": {"secret"}, "X-AnySSH-Device-ID": {"dev-note"}, "X-AnySSH-Note": {oversizedNote}, "X-AnySSH-Note-Version": {"3"}})
+	if err != nil {
+		t.Fatalf("register with oversized note failed: %v", err)
+	}
+	defer conn2.Close()
+	resp, err := adminRequest(http.MethodGet, httpServer.URL+"/api/admin/clients", "", srv.adminSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clients []adminClient
+	if json.NewDecoder(resp.Body).Decode(&clients) != nil {
+		t.Fatal("admin clients JSON did not decode after oversized note")
+	}
+	_ = resp.Body.Close()
+
+	// 4) A client session with an unknown id must be rejected, not panic.
+	sconn, sresp, serr := websocket.DefaultDialer.Dial(base+"/api/session?id=deadbeef", http.Header{"X-AnySSH-Session-Key": {"whatever"}})
+	if serr == nil {
+		sconn.Close()
+		t.Fatal("expected rejection for unknown session id")
+	}
+	if sresp != nil {
+		_ = sresp.Body.Close()
+	}
+
+	// 5) The server must still be healthy after all of the above.
+	health, err := http.Get(httpServer.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(health.Body)
+	_ = health.Body.Close()
+	if health.StatusCode != http.StatusOK || !strings.Contains(string(body), "ok") {
+		t.Fatalf("server unhealthy after malformed input: %d %s", health.StatusCode, body)
+	}
+}
+
 func putAdminJSON(t *testing.T, method, url, body, secret string) {
 	t.Helper()
 	resp, err := adminRequest(method, url, body, secret)

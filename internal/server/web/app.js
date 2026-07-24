@@ -159,6 +159,28 @@
   terminal.onData((data) => sendFrame(0, data));
   terminal.onResize(sendSize);
   new ResizeObserver(() => fitAddon.fit()).observe(document.getElementById("terminal"));
+
+  // Own the paste event in the capture phase so Ctrl/Cmd+V (and right-click paste)
+  // works regardless of which element inside the terminal is focused. stopPropagation
+  // keeps xterm's own paste handler from firing a second time; terminal.paste keeps
+  // bracketed-paste mode intact.
+  const terminalElement = document.getElementById("terminal");
+  const pasteText = (text) => {
+    if (!text) return;
+    if (typeof terminal.paste === "function") terminal.paste(text);
+    else sendFrame(0, text);
+  };
+  terminalElement.addEventListener(
+    "paste",
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const data = event.clipboardData || window.clipboardData;
+      pasteText(data ? data.getData("text") : "");
+    },
+    true,
+  );
+
   window.addEventListener("beforeunload", () => clearTimeout(reconnectTimer));
   connect();
 })();
